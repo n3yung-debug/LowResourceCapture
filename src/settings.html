@@ -40,8 +40,6 @@
     border-radius: 7px; padding: 7px 9px; width: 100%;
   }
   input:focus, select:focus { outline: none; border-color: var(--accent2); }
-  .dur-row { display: flex; gap: 6px; }
-  .dur-row input { width: 72px; }
   .hotkey-btn { cursor: pointer; text-align: center; white-space: nowrap;
     background: var(--panel2); font-variant: small-caps; }
   .hotkey-btn.capturing { border-color: var(--accent2); color: var(--accent2); }
@@ -110,6 +108,8 @@
     <div class="section-title">Clip presets</div>
     <div id="presets"></div>
     <button class="add-btn" id="addBtn">+ Add preset</button>
+    <!-- Shared 15s-step suggestions for the merged duration field. -->
+    <datalist id="durOptions"></datalist>
 
     <div class="section-title">Audio</div>
     <div class="adv">
@@ -174,13 +174,16 @@
   let maxBuf = (cfg.buffer && cfg.buffer.max_seconds) ? cfg.buffer.max_seconds : 120;
   const durMax = Math.max(maxBuf, 120);
 
-  function durationOptions(selected) {
-    let opts = '<option value="">Preset…</option>';
+  // Fill the shared duration datalist with 15-second-step suggestions. The
+  // duration field is a plain number input, so you can pick one of these or
+  // type any custom value.
+  (function fillDurOptions() {
+    let opts = '';
     for (let s = 15; s <= durMax; s += 15) {
-      opts += `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}s</option>`;
+      opts += `<option value="${s}">${s} seconds</option>`;
     }
-    return opts;
-  }
+    document.getElementById('durOptions').innerHTML = opts;
+  })();
 
   function makePreset(p) {
     p = p || { name: 'New', seconds: 30, hotkey: '' };
@@ -192,11 +195,9 @@
         <input class="p-name" type="text" value="${escapeAttr(p.name)}">
       </div>
       <div>
-        <div class="lbl">Duration</div>
-        <div class="dur-row">
-          <input class="p-secs" type="number" min="1" value="${p.seconds}">
-          <select class="p-dur">${durationOptions(p.seconds)}</select>
-        </div>
+        <div class="lbl">Duration (seconds)</div>
+        <input class="p-secs" type="number" min="1" step="1" list="durOptions"
+               value="${p.seconds}" placeholder="e.g. 30">
       </div>
       <div>
         <div class="lbl">Hotkey</div>
@@ -204,10 +205,6 @@
       </div>
       <button class="icon-btn p-remove" title="Remove">✕</button>
     `;
-    // duration dropdown -> number
-    row.querySelector('.p-dur').addEventListener('change', e => {
-      if (e.target.value) row.querySelector('.p-secs').value = e.target.value;
-    });
     // remove
     row.querySelector('.p-remove').addEventListener('click', () => row.remove());
     // hotkey capture

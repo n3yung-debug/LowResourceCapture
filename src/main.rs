@@ -90,11 +90,6 @@ struct Tray {
     _icon: tray_icon::TrayIcon,
     settings_id: tray_icon::menu::MenuId,
     open_clips_id: tray_icon::menu::MenuId,
-    reload_id: tray_icon::menu::MenuId,
-    start_capture_id: tray_icon::menu::MenuId,
-    start_capture_video_id: tray_icon::menu::MenuId,
-    stop_capture_id: tray_icon::menu::MenuId,
-    dump_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     output_dir: std::path::PathBuf,
 }
@@ -103,21 +98,10 @@ fn build_tray(config: &Config) -> Result<Tray> {
     let menu = Menu::new();
     let settings = MenuItem::new("Settings…", true, None);
     let open_clips = MenuItem::new("Open clips folder", true, None);
-    let reload = MenuItem::new("Reload settings", true, None);
-    let start_capture = MenuItem::new("Start capture (debug)", true, None);
-    let start_capture_video = MenuItem::new("Start capture — video only (debug)", true, None);
-    let stop_capture = MenuItem::new("Stop capture (debug)", true, None);
-    let dump = MenuItem::new("Dump raw buffer (debug)", true, None);
     let quit = MenuItem::new("Quit", true, None);
 
     menu.append(&settings)?;
     menu.append(&open_clips)?;
-    menu.append(&reload)?;
-    menu.append(&PredefinedMenuItem::separator())?;
-    menu.append(&start_capture)?;
-    menu.append(&start_capture_video)?;
-    menu.append(&stop_capture)?;
-    menu.append(&dump)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit)?;
 
@@ -133,11 +117,6 @@ fn build_tray(config: &Config) -> Result<Tray> {
         _icon: tray_icon,
         settings_id: settings.id().clone(),
         open_clips_id: open_clips.id().clone(),
-        reload_id: reload.id().clone(),
-        start_capture_id: start_capture.id().clone(),
-        start_capture_video_id: start_capture_video.id().clone(),
-        stop_capture_id: stop_capture.id().clone(),
-        dump_id: dump.id().clone(),
         quit_id: quit.id().clone(),
         output_dir: config.output_dir.clone(),
     })
@@ -212,26 +191,6 @@ fn run_message_loop(
                     );
                 }
                 open_folder(&tray.output_dir);
-            } else if ev.id == tray.reload_id {
-                reload_config_and_hotkeys(router, engine_tx);
-            } else if ev.id == tray.start_capture_id {
-                log::info!("debug: start capture (video + audio)");
-                let _ = engine_tx.send(EngineCommand::StartCapture {
-                    window_title: "(debug: primary monitor)".to_string(),
-                    with_audio: true,
-                });
-            } else if ev.id == tray.start_capture_video_id {
-                log::info!("debug: start capture (video only)");
-                let _ = engine_tx.send(EngineCommand::StartCapture {
-                    window_title: "(debug: primary monitor, video only)".to_string(),
-                    with_audio: false,
-                });
-            } else if ev.id == tray.stop_capture_id {
-                log::info!("debug: stop capture");
-                let _ = engine_tx.send(EngineCommand::StopCapture);
-            } else if ev.id == tray.dump_id {
-                log::info!("debug: dump raw buffer");
-                let _ = engine_tx.send(EngineCommand::DumpBuffer);
             } else if ev.id == tray.quit_id {
                 unsafe {
                     windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);

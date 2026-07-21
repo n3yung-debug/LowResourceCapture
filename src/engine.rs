@@ -105,6 +105,9 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
         config.buffer.max_seconds,
         config.buffer.max_ram_mb,
     )));
+    // Samples the foreground app once a second so a saved clip is filed under
+    // wherever it spent the most time (see SaveClip).
+    let fg_tracker = crate::game_detect::ForegroundTracker::start(config.buffer.max_seconds);
     let mut capture: Option<MonitorCapture> = None;
     let mut audio: Option<AudioCapture> = None;
     // The video encoder's output media type, needed to mux. Set when capture
@@ -165,9 +168,12 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     // TODO(layer 5): toast "Nothing to clip yet".
                 } else if let Some(vtype) = video_out_type.as_ref() {
                     // File the clip under a per-source subfolder named for the
-                    // foreground app (game exe, or "Browser"/"Desktop"), created
-                    // on demand: <output_dir>\<source>\clip_<stamp>_<len>s.mp4.
-                    let source = crate::game_detect::foreground_app_folder();
+                    // app the clip spent the most time in (ties -> the app at the
+                    // clip's start); fall back to the live foreground app if there
+                    // is no history yet. <output_dir>\<source>\clip_...mp4.
+                    let source = fg_tracker
+                        .majority_folder(std::time::Duration::from_secs(seconds as u64))
+                        .unwrap_or_else(crate::game_detect::foreground_app_folder);
                     let dir = config.output_dir.join(&source);
                     std::fs::create_dir_all(&dir).ok();
                     let path = muxer::clip_filename(&dir, seconds);

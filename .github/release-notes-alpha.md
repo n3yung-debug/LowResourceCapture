@@ -1,38 +1,30 @@
-## LowResourceCapture — alpha: clips now have sound 🔊
+## LowResourceCapture — alpha: UX cleanup 🧹
 
-**L4b: the captured audio is now muxed into the saved `.mp4`.** Until now clips
-were video-only even though audio was being captured; this build writes the
-audio into the file.
+Polish pass from your feedback.
 
-### What's in the clip
-- **Game / desktop audio** — everything you heard (loopback of your output).
-- **Your microphone** — as a **separate track** (only when the mic toggle is ON;
-  Settings → Audio).
+### Clips filed by where they spent the most time
+The clip's folder is no longer just "whatever's focused when you hit the hotkey."
+The app now samples the foreground app once a second, and a saved clip goes to
+the app it spent the **most time in** over that window (ties break toward the app
+you were in at the **start** of the clip). So a clip that's mostly gameplay lands
+in the game's folder even if you tabbed to the desktop right before saving.
 
-Both are muxed with **no re-encoding** (they're already AAC), so saving stays
-near-instant and cheap.
+### One duration field
+The clip-length dropdown and the number box are now a **single field**: type any
+number of seconds, or click it to pick from the 15-second-step suggestions.
 
-### A/V sync
-Audio is timestamped with WASAPI's **QPC clock — the same clock as the video** —
-and every stream is rebased to the video's start and written in timestamp order.
-So audio lines up with the picture instead of drifting, even though the clip
-starts a little before the exact N-second mark (video snaps back to a keyframe).
-
-> **Note on playback:** per the design, game and mic are **separate audio
-> tracks**. Most players (VLC, etc.) play the **first track (game audio)** by
-> default and let you switch to the mic track; video editors see both. If you'd
-> rather have them pre-mixed into one track for one-click playback, say so and
-> I'll add a mix option.
+### Simpler tray menu
+Since capture is always-on, the tray menu is trimmed to what you actually use:
+**Settings…**, **Open clips folder**, **Quit**. Removed the debug **Start/Stop
+capture** items, **Reload settings** (settings already reload automatically when
+you save in the GUI), and **Dump raw buffer** (an early debug tool).
 
 ### Try it
-1. Install over the top, launch (it's capturing immediately).
-2. Make some game/desktop sound (and talk, if the mic toggle is ON).
-3. Press **F9**, open the clip in `<Videos>\LowResourceCapture\<source>\`.
-4. You should now **hear** it. The log shows `saved '…' clip: …, N video frames
-   + K audio track(s)`.
-
-If audio is out of sync or missing, grab the log
-(`C:\Program Files (x86)\LowResourceCapture\logs\`) and I'll tune it.
+1. Install over the top.
+2. Spend time in a game, tab to the desktop briefly, hit **F9** — the clip should
+   still land in the **game's** folder.
+3. Open **Settings…** → the duration field is now one box with a dropdown built
+   into it.
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.

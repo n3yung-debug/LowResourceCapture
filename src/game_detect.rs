@@ -19,12 +19,85 @@
 
 use crate::config::Config;
 
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use windows::core::PWSTR;
 use windows::Win32::Foundation::{CloseHandle, HWND, MAX_PATH};
 use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+/// Samples the foreground app once a second so a saved clip can be filed under
+/// wherever it spent the **most** time (not just whatever's focused at the
+/// instant you press the hotkey). Cheap: one GetForegroundWindow +
+/// process-name lookup per second, history capped to the buffer length.
+pub struct ForegroundTracker {
+    samples: Mutex<VecDeque<(Instant, String)>>,
+    max_age: Duration,
+}
+
+impl ForegroundTracker {
+    /// Start the sampler thread; keeps at most `max_age_secs` of history.
+    pub fn start(max_age_secs: u32) -> Arc<Self> {
+        let tracker = Arc::new(Self {
+            samples: Mutex::new(VecDeque::new()),
+            max_age: Duration::from_secs(max_age_secs.max(1) as u64),
+        });
+        let t = tracker.clone();
+        std::thread::Builder::new()
+            .name("fg-sampler".into())
+            .spawn(move || loop {
+                let folder = foreground_app_folder();
+                let now = Instant::now();
+                {
+                    let mut s = t.samples.lock().unwrap();
+                    s.push_back((now, folder));
+                    while let Some((ts, _)) = s.front() {
+                        if now.duration_since(*ts) > t.max_age {
+                            s.pop_front();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            })
+            .expect("spawn foreground sampler");
+        tracker
+    }
+
+    /// The folder the clip spent the most time in over the last `window`.
+    /// Ties break toward the app focused at the **start** of the window. Returns
+    /// `None` if there's no history yet (caller falls back to the live folder).
+    pub fn majority_folder(&self, window: Duration) -> Option<String> {
+        let now = Instant::now();
+        let samples = self.samples.lock().unwrap();
+        let mut counts: HashMap<&str, u32> = HashMap::new();
+        let mut order: Vec<&str> = Vec::new(); // first-seen (oldest) order
+        for (ts, folder) in samples.iter() {
+            if now.duration_since(*ts) <= window {
+                let f = folder.as_str();
+                if !counts.contains_key(f) {
+                    order.push(f);
+                }
+                *counts.entry(f).or_insert(0) += 1;
+            }
+        }
+        // Highest count wins; on a tie keep the earliest (oldest) folder, since
+        // `order` is oldest-first and we only replace on a strictly greater count.
+        let mut best: Option<(&str, u32)> = None;
+        for f in order {
+            let c = counts[f];
+            if best.map(|(_, bc)| c > bc).unwrap_or(true) {
+                best = Some((f, c));
+            }
+        }
+        best.map(|(f, _)| f.to_string())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GameEvent {
