@@ -1,39 +1,42 @@
-## LowResourceCapture — alpha: fixes the "on and off" / stuck-at-15s bug 🩹
+## LowResourceCapture — alpha: stall fix + toast, startup, live tray, mixed audio 🩹✨
 
-Your log nailed it. Thank you — it made the bug obvious.
+Bundles the critical stall fix with all four requested extras.
 
-### What was happening
-Clips were muxed **on the engine's command thread**, and each save got
-progressively slower (your log: ~50 ms → 8 s → 53 s → minutes). So the whole
-command loop stalled: most hotkey presses never got their clip written
-(25 presses → 7 saves in your log), and the longer 30/60/90 s clips were queued
-furthest back and effectively **never finished** — hence "works on and off" and
-"never past 15 seconds." Clips that *did* eventually write landed in the wrong
-folder (explorer, Spotify) because the folder was chosen minutes later when they
-finally completed.
+### The big fix: clips no longer stall
+Your log showed clip writes running on the engine's command thread and getting
+progressively slower (~50 ms → 8 s → 53 s → minutes), which jammed everything —
+most hotkey presses never produced a clip, and 30/60/90 s clips effectively never
+finished ("works on and off" / "never past 15 seconds"). Now:
+- **Clips are muxed on a dedicated background thread**, so a slow save never
+  blocks hotkeys or capture. Every press is handled immediately.
+- **Folder is chosen at press time**, so delayed writes can't misfile clips.
+- **Bounded write queue** (spamming the hotkey can't balloon RAM).
+- **Saving settings no longer wipes your replay buffer.**
+- **Per-phase timing** is logged per save (`write_clip phases: setup/write/finalize`)
+  so any remaining slowness is pinpointed in the log.
 
-### The fix
-- **Clips are now written on a dedicated background thread.** A slow save can
-  never block the command loop or capture again — hotkeys stay responsive and
-  every press is handled immediately.
-- **The folder is decided at the moment you press the hotkey** (by majority
-  time), so clips file correctly even if a save takes a bit.
-- **The queue is bounded** — mashing the hotkey won't pile up memory.
-- **Saving settings no longer wipes your replay buffer** (it was rebuilding the
-  ring on every settings save).
-- **Per-phase timing is logged** for each save (`write_clip phases: setup … ms,
-  write … ms, finalize … ms`) so if any save is still slow, the log will show
-  exactly which step — and I'll optimize that specifically.
+### New extras
+- **🔔 "Clip saved" toast** — a desktop notification with the length and folder
+  each time you clip. (Your main "it worked" signal now that there are no
+  buttons.)
+- **🚀 Run-at-Windows-startup toggle** — Settings → General, flip it anytime
+  (green ON / red OFF), no reinstall needed.
+- **📊 Live tray tooltip** — hover the tray icon to see
+  `recording · last Ns buffered · NN MB`.
+- **🎚️ Mixed audio option** — Settings → Audio → *Mix game + mic into one track*.
+  On = one combined track (players play game **and** mic together on normal
+  playback); off = separate tracks. A real-time mixer sums the desktop-loopback
+  and mic streams (the mic is resampled to match), so this is a first cut — if
+  the balance or sync is off, tell me and I'll tune it.
 
 ### Try it
 1. Install over the top.
-2. Let it capture a while, then press **F9 (15s)**, **F10 (30s)**, **F11 (60s)**
-   — each should now save promptly, at the right length, in the right folder.
-3. If anything's still slow, send the log — the new `write_clip phases:` line
-   tells me where the time goes.
-
-*(Next build: the toast notification, run-at-startup toggle, live tray tooltip,
-and the mixed-audio option you asked for.)*
+2. Press **F9 / F10 / F11** — each saves promptly, at the right length, in the
+   right folder, with a toast.
+3. Hover the tray icon (live status); open **Settings → General** for the
+   startup toggle.
+4. If any save still drags, send the log — the `write_clip phases:` line shows
+   exactly where.
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.

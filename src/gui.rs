@@ -35,6 +35,8 @@ struct PresetIn {
 struct SaveMsg {
     presets: Vec<PresetIn>,
     mic_enabled: Option<bool>,
+    mix_audio: Option<bool>,
+    run_at_startup: Option<bool>,
     output_dir: Option<String>,
     codec: Option<String>,
     bitrate_mbps: Option<u32>,
@@ -53,8 +55,9 @@ enum IpcResult {
 pub fn run() -> Result<()> {
     let mut config = Config::load_or_create()?;
     let init = format!(
-        "window.__CONFIG__ = {};",
-        serde_json::to_string(&config).context("serialize config for GUI")?
+        "window.__CONFIG__ = {}; window.__STARTUP__ = {};",
+        serde_json::to_string(&config).context("serialize config for GUI")?,
+        crate::startup::is_enabled()
     );
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
@@ -136,14 +139,28 @@ fn apply_and_save(config: &mut Config, m: SaveMsg) {
             })
             .collect();
     }
-    if let Some(mic) = m.mic_enabled {
-        // Toggle mic capture on/off while always keeping desktop/game audio.
-        // Preserve a "mixed" choice when the mic stays on.
-        config.audio = match (mic, config.audio) {
-            (true, AudioMode::GameAndMicMixed) => AudioMode::GameAndMicMixed,
-            (true, _) => AudioMode::GameAndMicSeparate,
-            (false, _) => AudioMode::GameOnly,
+    if m.mic_enabled.is_some() || m.mix_audio.is_some() {
+        // Combine the mic on/off and mix-into-one-track toggles into an audio
+        // mode. Desktop/game audio is always captured.
+        let mic = m.mic_enabled.unwrap_or(matches!(
+            config.audio,
+            AudioMode::GameAndMicSeparate | AudioMode::GameAndMicMixed
+        ));
+        let mixed = m
+            .mix_audio
+            .unwrap_or(matches!(config.audio, AudioMode::GameAndMicMixed));
+        config.audio = if !mic {
+            AudioMode::GameOnly
+        } else if mixed {
+            AudioMode::GameAndMicMixed
+        } else {
+            AudioMode::GameAndMicSeparate
         };
+    }
+    if let Some(startup) = m.run_at_startup {
+        if let Err(e) = crate::startup::set_enabled(startup) {
+            log::warn!("gui: could not set run-at-startup: {e:#}");
+        }
     }
     if let Some(d) = m.output_dir {
         if !d.trim().is_empty() {

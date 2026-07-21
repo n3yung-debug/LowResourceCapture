@@ -124,6 +124,32 @@
           <span class="txt txt-off">OFF</span>
         </button>
       </div>
+      <div class="toggle-row" style="margin-top:12px;">
+        <div>
+          <div class="toggle-label">Mix game + mic into one track</div>
+          <div class="hint">On: one combined track (players play both at once). Off: separate game and mic tracks.</div>
+        </div>
+        <button class="toggle" id="mixToggle" role="switch" aria-checked="false" title="Mix audio into one track">
+          <span class="knob"></span>
+          <span class="txt txt-on">ON</span>
+          <span class="txt txt-off">OFF</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="section-title">General</div>
+    <div class="adv">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Run at Windows startup</div>
+          <div class="hint">Launch LowResourceCapture automatically when you sign in.</div>
+        </div>
+        <button class="toggle" id="startupToggle" role="switch" aria-checked="false" title="Toggle run at startup">
+          <span class="knob"></span>
+          <span class="txt txt-on">ON</span>
+          <span class="txt txt-off">OFF</span>
+        </button>
+      </div>
     </div>
 
     <details>
@@ -274,6 +300,14 @@
   const micOn = ['gameandmicseparate', 'gameandmicmixed'].includes((cfg.audio || 'gameandmicseparate').toLowerCase());
   micToggle.setAttribute('aria-checked', micOn ? 'true' : 'false');
 
+  const mixToggle = document.getElementById('mixToggle');
+  initToggle(mixToggle);
+  mixToggle.setAttribute('aria-checked', (cfg.audio || '').toLowerCase() === 'gameandmicmixed' ? 'true' : 'false');
+
+  const startupToggle = document.getElementById('startupToggle');
+  initToggle(startupToggle);
+  startupToggle.setAttribute('aria-checked', window.__STARTUP__ ? 'true' : 'false');
+
   document.getElementById('outputDir').value = cfg.output_dir || '';
   document.getElementById('codec').value = (cfg.encoder && cfg.encoder.codec) || 'hevc';
   document.getElementById('bitrate').value = (cfg.encoder && cfg.encoder.bitrate_mbps) || 40;
@@ -293,6 +327,8 @@
       cmd: 'save',
       presets,
       mic_enabled: micToggle.getAttribute('aria-checked') === 'true',
+      mix_audio: mixToggle.getAttribute('aria-checked') === 'true',
+      run_at_startup: startupToggle.getAttribute('aria-checked') === 'true',
       output_dir: document.getElementById('outputDir').value.trim(),
       codec: document.getElementById('codec').value,
       bitrate_mbps: parseInt(document.getElementById('bitrate').value) || 40,

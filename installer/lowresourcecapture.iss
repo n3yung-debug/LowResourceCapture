@@ -13,6 +13,8 @@
 #define MyAppName "LowResourceCapture"
 #define MyAppExe  "lowresourcecapture.exe"
 #define MyAppPublisher "LowResourceCapture"
+; Must match toast::AUMID in the app so "clip saved" toasts are allowed.
+#define MyAppAUMID "LowResourceCapture.App"
 
 [Setup]
 ; Stable AppId — keep constant across versions so upgrades replace cleanly.
@@ -63,9 +65,9 @@ Source: "..\target\release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; AppUserModelID: "{#MyAppAUMID}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon; AppUserModelID: "{#MyAppAUMID}"
 
 [Registry]
 ; Run-at-startup for the current user (per-user, no admin). Gated on the task.

@@ -15,6 +15,9 @@ mod hotkeys;
 mod logging;
 mod muxer;
 mod ringbuffer;
+mod startup;
+mod stats;
+mod toast;
 
 /// Custom thread message: settings GUI closed → reload config + hotkeys.
 const WM_RELOAD: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
@@ -53,6 +56,9 @@ fn run() -> Result<()> {
     }
 
     log::info!("LowResourceCapture starting");
+
+    // Register the app id so "clip saved" toasts are allowed (best-effort).
+    toast::init();
 
     let config = Config::load_or_create()?;
     std::fs::create_dir_all(&config.output_dir).ok();
@@ -136,13 +142,16 @@ fn run_message_loop(
 ) -> Result<()> {
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetMessageW, TranslateMessage, MSG,
+        DispatchMessageW, GetMessageW, SetTimer, TranslateMessage, MSG, WM_TIMER,
     };
 
     let hotkey_rx = GlobalHotKeyEvent::receiver();
     let menu_rx = MenuEvent::receiver();
     // Thread id so the settings-GUI waiter thread can wake us to reload.
     let main_tid = unsafe { GetCurrentThreadId() };
+
+    // 1 Hz thread timer to refresh the tray tooltip with live capture stats.
+    unsafe { SetTimer(None, 1, 1000, None) };
 
     let mut msg = MSG::default();
     loop {
@@ -157,6 +166,8 @@ fn run_message_loop(
         if msg.message == WM_RELOAD {
             // Settings GUI closed — reload config and re-register hotkeys live.
             reload_config_and_hotkeys(router, engine_tx);
+        } else if msg.message == WM_TIMER {
+            let _ = tray._icon.set_tooltip(Some(stats::tooltip()));
         } else {
             unsafe {
                 let _ = TranslateMessage(&msg);

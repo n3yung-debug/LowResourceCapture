@@ -10,6 +10,7 @@
 //! so nothing crosses a thread boundary. `UNVERIFIED` until it runs on Windows.
 
 use anyhow::{Context, Result};
+use std::collections::VecDeque;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,8 +19,9 @@ use std::time::Instant;
 
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    AUDCLNT_STREAMFLAGS_LOOPBACK,
+    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer,
@@ -95,6 +97,15 @@ impl AudioCapture {
                 mic_type,
             });
         }
+        if matches!(mode, AudioMode::GameAndMicMixed) {
+            // One worker mixes game + mic into a single AAC track (game_ring).
+            workers.push(spawn_mixed_worker("audio-mixed", game_ring, game_type.clone()));
+            return Ok(AudioCapture {
+                workers,
+                game_type,
+                mic_type,
+            });
+        }
         // Game/desktop audio via render-endpoint loopback.
         workers.push(spawn_worker(
             "audio-game",
@@ -103,11 +114,8 @@ impl AudioCapture {
             true,
             game_type.clone(),
         ));
-        // Microphone (no loopback) when the mode wants it.
-        if matches!(
-            mode,
-            AudioMode::GameAndMicSeparate | AudioMode::GameAndMicMixed
-        ) {
+        // Microphone (no loopback) when the mode wants it (separate track).
+        if matches!(mode, AudioMode::GameAndMicSeparate) {
             workers.push(spawn_worker(
                 "audio-mic",
                 mic_ring,
@@ -168,6 +176,206 @@ fn spawn_worker(
         shutdown,
         thread: Some(thread),
     }
+}
+
+/// Spawn the worker that mixes game loopback + mic into one AAC track.
+fn spawn_mixed_worker(name: &str, ring: Arc<Mutex<RingBuffer>>, out_type: SharedAudioType) -> Worker {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let sd = shutdown.clone();
+    let thread = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            if let Err(e) = capture_loop_mixed(&sd, &ring, &out_type) {
+                log::error!("mixed audio capture failed: {e:#}");
+            }
+        })
+        .expect("spawn mixed audio thread");
+    Worker {
+        shutdown,
+        thread: Some(thread),
+    }
+}
+
+/// Capture game (render loopback) + mic, sum them into one AAC track. The mic
+/// client is initialized with the *game's* mix format so WASAPI resamples the
+/// mic to match (shared mode), letting us add sample-for-sample. The mic is
+/// buffered in a small FIFO and consumed against each game packet (game is the
+/// master clock), so alignment is within a packet or two.
+fn capture_loop_mixed(
+    shutdown: &AtomicBool,
+    ring: &Arc<Mutex<RingBuffer>>,
+    out_type: &SharedAudioType,
+) -> Result<()> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .context("CoInitializeEx")?;
+        MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup(mixed)")?;
+
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("MMDeviceEnumerator")?;
+
+        // Game / desktop audio (render endpoint, loopback).
+        let g_dev = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .context("game endpoint")?;
+        let g_client: IAudioClient = g_dev.Activate(CLSCTX_ALL, None).context("game Activate")?;
+        let g_mix = g_client.GetMixFormat().context("game GetMixFormat")?;
+        let (rate, src_channels, src_bits) = {
+            let w = &*g_mix;
+            (w.nSamplesPerSec, w.nChannels, w.wBitsPerSample)
+        };
+        g_client
+            .Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                10_000_000,
+                0,
+                g_mix,
+                None,
+            )
+            .context("game Initialize")?;
+        let g_event = CreateEventW(None, false, false, None).context("game event")?;
+        g_client.SetEventHandle(g_event).context("game SetEventHandle")?;
+        let g_cap: IAudioCaptureClient = g_client.GetService().context("game GetService")?;
+
+        // Mic, initialized with the GAME format so WASAPI resamples it to match.
+        let m_dev = enumerator
+            .GetDefaultAudioEndpoint(eCapture, eConsole)
+            .context("mic endpoint")?;
+        let m_client: IAudioClient = m_dev.Activate(CLSCTX_ALL, None).context("mic Activate")?;
+        let m_mix = m_client.GetMixFormat().context("mic GetMixFormat")?; // freed at end
+        m_client
+            .Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                // Auto-convert so the mic is resampled to the game's format.
+                AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+                    | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+                10_000_000,
+                0,
+                g_mix,
+                None,
+            )
+            .context("mic Initialize")?;
+        let m_event = CreateEventW(None, false, false, None).context("mic event")?;
+        m_client.SetEventHandle(m_event).context("mic SetEventHandle")?;
+        let m_cap: IAudioCaptureClient = m_client.GetService().context("mic GetService")?;
+
+        let sc = src_channels as usize;
+        let channels: u16 = src_channels.min(2).max(1);
+        let oc = channels as usize;
+        let encoder = create_aac_encoder(rate, channels).context("mixed AAC encoder")?;
+        if let Ok(ot) = encoder.GetOutputCurrentType(0) {
+            out_type.set(ot);
+        }
+
+        g_client.Start().context("game Start")?;
+        m_client.Start().context("mic Start")?;
+        log::info!(
+            "audio started: MIXED game+mic {rate}Hz {src_channels}ch {src_bits}-bit -> AAC {channels}ch"
+        );
+
+        let silent_flag = AUDCLNT_BUFFERFLAGS_SILENT.0 as u32;
+        let fifo_cap = rate as usize * sc; // ~1s of mic
+        let mut mic_fifo: VecDeque<f32> = VecDeque::new();
+        let mut total_frames: i64 = 0;
+        let mut aac_frames: u64 = 0;
+        let mut last = Instant::now();
+
+        while !shutdown.load(Ordering::Relaxed) {
+            let _ = WaitForSingleObject(g_event, 200);
+
+            // Drain the mic into the FIFO (game mix format => 32-bit float).
+            loop {
+                let mut p: *mut u8 = std::ptr::null_mut();
+                let mut nf: u32 = 0;
+                let mut fl: u32 = 0;
+                if m_cap.GetBuffer(&mut p, &mut nf, &mut fl, None, None).is_err() || nf == 0 {
+                    break;
+                }
+                let n = nf as usize * sc;
+                if src_bits == 32 && (fl & silent_flag) == 0 {
+                    let s = std::slice::from_raw_parts(p as *const f32, n);
+                    mic_fifo.extend(s.iter().copied());
+                } else {
+                    for _ in 0..n {
+                        mic_fifo.push_back(0.0);
+                    }
+                }
+                let _ = m_cap.ReleaseBuffer(nf);
+                while mic_fifo.len() > fifo_cap {
+                    mic_fifo.pop_front();
+                }
+            }
+
+            // Process game packets, summing one mic frame each.
+            loop {
+                let mut p: *mut u8 = std::ptr::null_mut();
+                let mut nf: u32 = 0;
+                let mut fl: u32 = 0;
+                let mut qpc: u64 = 0;
+                if g_cap
+                    .GetBuffer(&mut p, &mut nf, &mut fl, None, Some(&mut qpc))
+                    .is_err()
+                    || nf == 0
+                {
+                    break;
+                }
+                let frames = nf as usize;
+                let game_s: &[f32] = if src_bits == 32 && (fl & silent_flag) == 0 {
+                    std::slice::from_raw_parts(p as *const f32, frames * sc)
+                } else {
+                    &[]
+                };
+
+                let mut pcm = Vec::with_capacity(frames * oc * 2);
+                for f in 0..frames {
+                    let mut mic_frame = [0f32; 8];
+                    for m in mic_frame.iter_mut().take(sc.min(8)) {
+                        *m = mic_fifo.pop_front().unwrap_or(0.0);
+                    }
+                    for c in 0..oc {
+                        let idx = c.min(sc - 1);
+                        let g = if game_s.is_empty() { 0.0 } else { game_s[f * sc + idx] };
+                        let mixed = (g + mic_frame[idx.min(7)]).clamp(-1.0, 1.0);
+                        let v = (mixed * 32767.0) as i16;
+                        pcm.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+
+                let pts = if qpc != 0 {
+                    qpc as i64
+                } else {
+                    total_frames * HNS_PER_SEC / rate as i64
+                };
+                let dur = frames as i64 * HNS_PER_SEC / rate as i64;
+                total_frames += frames as i64;
+                if let Ok(sample) = make_pcm_sample(&pcm, pts, dur) {
+                    if encoder.ProcessInput(0, &sample, 0).is_ok() {
+                        drain_aac(&encoder, ring, &mut aac_frames);
+                    }
+                }
+                let _ = g_cap.ReleaseBuffer(nf);
+            }
+
+            if last.elapsed().as_secs() >= 1 {
+                let kb = ring.lock().map(|r| r.bytes_used() / 1024).unwrap_or(0);
+                log::info!(
+                    "audio(mixed): {aac_frames} AAC frames, buffer {kb} KB, mic_fifo {}",
+                    mic_fifo.len()
+                );
+                last = Instant::now();
+            }
+        }
+
+        let _ = g_client.Stop();
+        let _ = m_client.Stop();
+        CoTaskMemFree(Some(g_mix as *const _));
+        CoTaskMemFree(Some(m_mix as *const _));
+        CoUninitialize();
+    }
+    Ok(())
 }
 
 /// Capture audio from `dataflow` (render+loopback for game, or capture for

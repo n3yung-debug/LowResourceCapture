@@ -42,6 +42,7 @@ struct WriteJob {
     path: std::path::PathBuf,
     label: String,
     seconds: u32,
+    folder: String,
     video_type: SendType,
     video: Vec<EncodedFrame>,
     audio: Vec<(SendType, Vec<EncodedFrame>)>,
@@ -73,15 +74,21 @@ fn spawn_clip_writer() -> (Sender<WriteJob>, Arc<AtomicUsize>) {
                     .collect();
                 let t0 = std::time::Instant::now();
                 match muxer::write_clip(&job.path, &job.video_type.0, &job.video, &tracks) {
-                    Ok(()) => log::info!(
-                        "saved '{}' clip: {}s, {} video frames + {} audio track(s) in {} ms -> {}",
-                        job.label,
-                        job.seconds,
-                        job.video.len(),
-                        tracks.len(),
-                        t0.elapsed().as_millis(),
-                        job.path.display()
-                    ),
+                    Ok(()) => {
+                        log::info!(
+                            "saved '{}' clip: {}s, {} video frames + {} audio track(s) in {} ms -> {}",
+                            job.label,
+                            job.seconds,
+                            job.video.len(),
+                            tracks.len(),
+                            t0.elapsed().as_millis(),
+                            job.path.display()
+                        );
+                        crate::toast::show(
+                            "Clip saved",
+                            &format!("{}s clip → {}", job.seconds, job.folder),
+                        );
+                    }
                     Err(e) => log::error!("failed to save '{}' clip: {e:#}", job.label),
                 }
                 p.fetch_sub(1, Ordering::Relaxed);
@@ -272,6 +279,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                             path,
                             label: label.clone(),
                             seconds,
+                            folder: source,
                             video_type: SendType(vtype.clone()),
                             video: frames,
                             audio: audio_tracks,

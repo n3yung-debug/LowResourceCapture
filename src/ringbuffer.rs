@@ -94,6 +94,14 @@ impl RingBuffer {
         self.bytes
     }
 
+    /// Time span currently buffered, in milliseconds (newest − oldest pts).
+    pub fn span_ms(&self) -> u64 {
+        match (self.frames.front(), self.frames.back()) {
+            (Some(f), Some(b)) => ((b.pts_100ns - f.pts_100ns).max(0) / 10_000) as u64,
+            _ => 0,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.frames.is_empty()
     }

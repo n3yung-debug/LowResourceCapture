@@ -319,8 +319,15 @@ fn pump_loop(
         }
 
         if last_stats.elapsed().as_secs() >= 1 {
-            let kb = ring.lock().map(|r| r.bytes_used() / 1024).unwrap_or(0);
-            log::info!("encode: {frames_out} frames ({key_out} keyframes), buffer {kb} KB");
+            let (bytes, span_ms) = ring
+                .lock()
+                .map(|r| (r.bytes_used() as u64, r.span_ms()))
+                .unwrap_or((0, 0));
+            crate::stats::set_buffer(bytes, span_ms);
+            log::info!(
+                "encode: {frames_out} frames ({key_out} keyframes), buffer {} KB",
+                bytes / 1024
+            );
             last_stats = Instant::now();
         }
     }
