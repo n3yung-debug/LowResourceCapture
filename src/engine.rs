@@ -92,8 +92,12 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
         config.buffer.max_seconds,
         config.buffer.max_ram_mb,
     )));
-    // Parallel ring for encoded (AAC) game audio; muxed with video at save.
+    // Parallel rings for encoded (AAC) game + mic audio; muxed at save.
     let audio_ring = std::sync::Arc::new(std::sync::Mutex::new(RingBuffer::new(
+        config.buffer.max_seconds,
+        config.buffer.max_ram_mb,
+    )));
+    let mic_ring = std::sync::Arc::new(std::sync::Mutex::new(RingBuffer::new(
         config.buffer.max_seconds,
         config.buffer.max_ram_mb,
     )));
@@ -122,7 +126,9 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                         Err(e) => log::error!("could not start capture: {e:#}"),
                     }
                     if audio.is_none() {
-                        audio = AudioCapture::start(config.audio, audio_ring.clone()).ok();
+                        audio =
+                            AudioCapture::start(config.audio, audio_ring.clone(), mic_ring.clone())
+                                .ok();
                     }
                 }
             }

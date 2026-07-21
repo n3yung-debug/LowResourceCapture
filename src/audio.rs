@@ -17,8 +17,9 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
-    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    eCapture, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
+    MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFMediaType, IMFSample, IMFTransform, MFCreateMediaType, MFCreateMemoryBuffer,
@@ -47,36 +48,40 @@ pub struct AudioTracks {
     pub mic: Vec<EncodedFrame>,
 }
 
-/// Running audio capture. Dropping it stops the capture thread.
-pub struct AudioCapture {
+struct Worker {
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
+/// Running audio capture (game loopback + optional mic). Dropping it stops all
+/// capture threads.
+pub struct AudioCapture {
+    workers: Vec<Worker>,
+}
+
 impl AudioCapture {
-    /// Start capturing + encoding per `mode`, pushing AAC frames to `ring`.
-    /// `None` is a no-op.
-    pub fn start(mode: AudioMode, ring: Arc<Mutex<RingBuffer>>) -> Result<AudioCapture> {
+    /// Start capture per `mode`: game audio (loopback) into `game_ring`, and —
+    /// when the mode includes the mic — mic audio into `mic_ring`. `None` is a
+    /// no-op.
+    pub fn start(
+        mode: AudioMode,
+        game_ring: Arc<Mutex<RingBuffer>>,
+        mic_ring: Arc<Mutex<RingBuffer>>,
+    ) -> Result<AudioCapture> {
+        let mut workers = Vec::new();
         if matches!(mode, AudioMode::None) {
-            return Ok(AudioCapture {
-                shutdown: Arc::new(AtomicBool::new(true)),
-                thread: None,
-            });
+            return Ok(AudioCapture { workers });
         }
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let sd = shutdown.clone();
-        let thread = std::thread::Builder::new()
-            .name("audio-loopback".into())
-            .spawn(move || {
-                if let Err(e) = loopback_loop(&sd, &ring) {
-                    log::error!("audio loopback capture failed: {e:#}");
-                }
-            })
-            .expect("spawn audio capture thread");
-        Ok(AudioCapture {
-            shutdown,
-            thread: Some(thread),
-        })
+        // Game/desktop audio via render-endpoint loopback.
+        workers.push(spawn_worker("audio-game", game_ring, eRender, true));
+        // Microphone (no loopback) when the mode wants it.
+        if matches!(
+            mode,
+            AudioMode::GameAndMicSeparate | AudioMode::GameAndMicMixed
+        ) {
+            workers.push(spawn_worker("audio-mic", mic_ring, eCapture, false));
+        }
+        Ok(AudioCapture { workers })
     }
 
     /// L4 will return the buffered audio to pair with a saved clip.
@@ -90,15 +95,47 @@ impl AudioCapture {
 
 impl Drop for AudioCapture {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
+        for w in &self.workers {
+            w.shutdown.store(true, Ordering::Relaxed);
+        }
+        for w in &mut self.workers {
+            if let Some(t) = w.thread.take() {
+                let _ = t.join();
+            }
         }
     }
 }
 
-/// Capture game audio (loopback), encode to AAC, push into `ring`.
-fn loopback_loop(shutdown: &AtomicBool, ring: &Arc<Mutex<RingBuffer>>) -> Result<()> {
+fn spawn_worker(
+    name: &str,
+    ring: Arc<Mutex<RingBuffer>>,
+    dataflow: EDataFlow,
+    loopback: bool,
+) -> Worker {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let sd = shutdown.clone();
+    let thread = std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            if let Err(e) = capture_loop(&sd, &ring, dataflow, loopback) {
+                log::error!("audio capture failed: {e:#}");
+            }
+        })
+        .expect("spawn audio capture thread");
+    Worker {
+        shutdown,
+        thread: Some(thread),
+    }
+}
+
+/// Capture audio from `dataflow` (render+loopback for game, or capture for
+/// mic), encode to AAC, push into `ring`.
+fn capture_loop(
+    shutdown: &AtomicBool,
+    ring: &Arc<Mutex<RingBuffer>>,
+    dataflow: EDataFlow,
+    loopback: bool,
+) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
             .ok()
@@ -108,7 +145,7 @@ fn loopback_loop(shutdown: &AtomicBool, ring: &Arc<Mutex<RingBuffer>>) -> Result
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).context("MMDeviceEnumerator")?;
         let device = enumerator
-            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .GetDefaultAudioEndpoint(dataflow, eConsole)
             .context("GetDefaultAudioEndpoint")?;
         let client: IAudioClient = device.Activate(CLSCTX_ALL, None).context("Activate")?;
 
@@ -120,10 +157,15 @@ fn loopback_loop(shutdown: &AtomicBool, ring: &Arc<Mutex<RingBuffer>>) -> Result
         // AAC input: 16-bit PCM, 1–2 channels. Downmix >2 channels to stereo.
         let channels: u16 = src_channels.min(2).max(1);
 
+        let stream_flags = if loopback {
+            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+        } else {
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+        };
         client
             .Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                stream_flags,
                 10_000_000,
                 0,
                 mix,
