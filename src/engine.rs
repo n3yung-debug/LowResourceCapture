@@ -84,7 +84,11 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
         );
     }
 
-    let mut ring = RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
+    // Shared with the encoder pump thread, which pushes encoded frames.
+    let ring = std::sync::Arc::new(std::sync::Mutex::new(RingBuffer::new(
+        config.buffer.max_seconds,
+        config.buffer.max_ram_mb,
+    )));
     let mut capture: Option<MonitorCapture> = None;
 
     log::info!("engine started (idle)");
@@ -100,7 +104,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     // L2a: capture the primary monitor. L2c will attach the
                     // NVENC encoder here and begin feeding `ring`; L2e switches
                     // the target to the foreground window.
-                    match MonitorCapture::start(config.encoder.clone()) {
+                    match MonitorCapture::start(config.encoder.clone(), ring.clone()) {
                         Ok(c) => capture = Some(c),
                         Err(e) => log::error!("could not start capture: {e:#}"),
                     }
@@ -115,7 +119,10 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                 }
             }
             EngineCommand::SaveClip { seconds, label } => {
-                let frames = ring.extract_last(seconds);
+                let (frames, kb) = {
+                    let r = ring.lock().unwrap();
+                    (r.extract_last(seconds), r.bytes_used() / 1024)
+                };
                 if frames.is_empty() {
                     log::warn!(
                         "clip '{label}' ({seconds}s) requested but buffer is empty \
@@ -124,9 +131,8 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     // TODO(layer 5): toast "Nothing to clip yet".
                 } else {
                     log::info!(
-                        "saving '{label}' clip: {seconds}s, {} frames, {} KB",
+                        "saving '{label}' clip: {seconds}s, {} frames, {kb} KB buffered",
                         frames.len(),
-                        ring.bytes_used() / 1024
                     );
                     // TODO(layer 4): hand `frames` (+ matching audio frames) to
                     // the muxer to write an .mp4 in config.output_dir.
@@ -135,8 +141,9 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
             EngineCommand::ReloadConfig(new_cfg) => {
                 log::info!("engine reloading config");
                 config = *new_cfg;
-                // Rebuild the ring if buffer sizing changed.
-                ring = RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
+                // Rebuild the ring contents in place (shared Arc stays valid).
+                *ring.lock().unwrap() =
+                    RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
             }
             EngineCommand::Shutdown => {
                 log::info!("engine shutting down");

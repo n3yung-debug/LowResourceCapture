@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use windows::core::{IInspectable, Interface, Ref};
 use windows::Foundation::TypedEventHandler;
@@ -29,11 +29,13 @@ use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
+use windows::Win32::Media::MediaFoundation::IMFSample;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 
 use crate::config::EncoderConfig;
 use crate::convert::Nv12Converter;
-use crate::encoder::VideoEncoder;
+use crate::encoder::{make_nv12_sample, EncoderPump, VideoEncoder};
+use crate::ringbuffer::RingBuffer;
 
 /// A running WGC capture of the primary monitor. Holds every COM object alive
 /// for the lifetime of the capture; dropping it stops the session.
@@ -43,15 +45,16 @@ pub struct MonitorCapture {
     _item: GraphicsCaptureItem,
     _device: ID3D11Device,
     _context: ID3D11DeviceContext,
-    _encoder: VideoEncoder,
+    // Dropping this stops the encoder pump thread.
+    _pump: EncoderPump,
     frames: Arc<AtomicU64>,
 }
 
 impl MonitorCapture {
-    /// Start capturing the primary monitor. Each frame is converted to NV12;
-    /// arrivals are logged periodically. A hardware encoder is created (L2c-1)
-    /// but not yet fed frames (that's L2c-2).
-    pub fn start(encoder_cfg: EncoderConfig) -> Result<Self> {
+    /// Start capturing the primary monitor: convert each frame to NV12 and
+    /// feed it to the hardware encoder, whose pump pushes encoded frames into
+    /// `ring`.
+    pub fn start(encoder_cfg: EncoderConfig, ring: Arc<Mutex<RingBuffer>>) -> Result<Self> {
         let (device, context) = create_d3d11_device()?;
         let winrt_device = to_winrt_device(&device)?;
         let item = primary_monitor_item()?;
@@ -71,43 +74,33 @@ impl MonitorCapture {
             .CreateCaptureSession(&item)
             .context("CreateCaptureSession")?;
 
-        // Converter + reusable NV12 target texture, moved into the callback.
+        // GPU BGRA->NV12 converter (moved into the callback).
         let converter = Nv12Converter::new(&device, &context, width, height)?;
-        let nv12 = converter.create_nv12_texture()?;
 
-        // Hardware encoder (created here; fed frames in L2c-2).
+        // Hardware encoder + its pump thread; the callback submits NV12 samples.
         let encoder = VideoEncoder::new(&device, width, height, &encoder_cfg)?;
+        let pump = encoder.start_pump(ring);
+        let tx = pump.sender();
+
+        let fps = encoder_cfg.fps.max(1);
+        let dur_100ns: i64 = 10_000_000 / fps as i64;
 
         let frames = Arc::new(AtomicU64::new(0));
         let frames_cb = frames.clone();
 
-        // FrameArrived fires on a background MTA thread. L2c will hand the NV12
-        // texture to the encoder here instead of just logging.
+        // FrameArrived fires on a background MTA thread: convert to a fresh NV12
+        // texture, wrap it as an IMFSample, and submit it to the encoder pump.
         let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
             move |pool: Ref<Direct3D11CaptureFramePool>, _args: Ref<IInspectable>| {
                 if let Some(pool) = pool.as_ref() {
                     if let Ok(frame) = pool.TryGetNextFrame() {
                         let n = frames_cb.fetch_add(1, Ordering::Relaxed) + 1;
-                        match frame_texture(&frame) {
-                            Ok(bgra) => match converter.convert(&bgra, &nv12) {
-                                Ok(()) => {
-                                    if n % 120 == 1 {
-                                        log::info!(
-                                            "capture+convert ok: {n} frames -> NV12 {width}x{height}"
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    if n % 120 == 1 {
-                                        log::warn!("nv12 convert failed at frame {n}: {e:#}");
-                                    }
-                                }
-                            },
-                            Err(e) => {
-                                if n % 120 == 1 {
-                                    log::warn!("frame texture unavailable at {n}: {e:#}");
-                                }
+                        if let Err(e) = process_frame(&frame, &converter, &tx, dur_100ns) {
+                            if n % 120 == 1 {
+                                log::warn!("frame {n} pipeline error: {e:#}");
                             }
+                        } else if n % 120 == 1 {
+                            log::info!("capture->encode: {n} frames ({width}x{height})");
                         }
                         let _ = frame.Close();
                     }
@@ -128,7 +121,7 @@ impl MonitorCapture {
             _item: item,
             _device: device,
             _context: context,
-            _encoder: encoder,
+            _pump: pump,
             frames,
         })
     }
@@ -143,6 +136,23 @@ impl Drop for MonitorCapture {
             self.frames.load(Ordering::Relaxed)
         );
     }
+}
+
+/// Convert one captured frame to NV12 and submit it to the encoder pump.
+fn process_frame(
+    frame: &Direct3D11CaptureFrame,
+    converter: &Nv12Converter,
+    tx: &std::sync::mpsc::Sender<IMFSample>,
+    dur_100ns: i64,
+) -> Result<()> {
+    let bgra = frame_texture(frame)?;
+    // Fresh NV12 texture per frame so in-flight encoder samples don't alias.
+    let nv12 = converter.create_nv12_texture()?;
+    converter.convert(&bgra, &nv12)?;
+    let ts = frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0);
+    let sample = make_nv12_sample(&nv12, ts, dur_100ns)?;
+    let _ = tx.send(sample);
+    Ok(())
 }
 
 /// Extract the `ID3D11Texture2D` backing a captured frame.
