@@ -151,6 +151,13 @@ impl MonitorCapture {
     }
 }
 
+impl MonitorCapture {
+    /// The video encoder's compressed output media type (for the muxer).
+    pub fn video_output_type(&self) -> windows::Win32::Media::MediaFoundation::IMFMediaType {
+        self._pump.output_type()
+    }
+}
+
 impl Drop for MonitorCapture {
     fn drop(&mut self) {
         let _ = self.session.Close();

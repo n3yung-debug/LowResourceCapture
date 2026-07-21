@@ -76,6 +76,9 @@ pub struct VideoEncoder {
     transform: IMFTransform,
     device_manager: IMFDXGIDeviceManager,
     event_gen: IMFMediaEventGenerator,
+    /// The encoder's compressed output media type (carries codec config) —
+    /// reused by the muxer to write mp4 without re-encoding.
+    output_type: IMFMediaType,
     pub codec: Codec,
     pub width: u32,
     pub height: u32,
@@ -124,6 +127,11 @@ impl VideoEncoder {
         configure(&transform, codec, width, height, cfg)
             .with_context(|| format!("configuring {} encoder", codec_name(codec)))?;
 
+        // Capture the compressed output type for the muxer (carries codec
+        // config so mp4 can be written without re-encoding).
+        let output_type =
+            unsafe { transform.GetOutputCurrentType(0) }.context("GetOutputCurrentType")?;
+
         unsafe {
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
@@ -146,6 +154,7 @@ impl VideoEncoder {
             transform,
             device_manager,
             event_gen,
+            output_type,
             codec,
             width,
             height,
@@ -160,6 +169,7 @@ impl VideoEncoder {
             transform,
             device_manager,
             event_gen,
+            output_type,
             codec,
             ..
         } = self;
@@ -186,6 +196,7 @@ impl VideoEncoder {
             input_tx: tx,
             shutdown,
             thread: Some(thread),
+            output_type,
             codec,
         }
     }
@@ -196,6 +207,7 @@ pub struct EncoderPump {
     input_tx: Sender<FrameMsg>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    output_type: IMFMediaType,
     pub codec: Codec,
 }
 
@@ -203,6 +215,11 @@ impl EncoderPump {
     /// A cloned sender for the capture callback to submit NV12 frames.
     pub fn sender(&self) -> Sender<FrameMsg> {
         self.input_tx.clone()
+    }
+
+    /// The compressed output media type — used by the muxer.
+    pub fn output_type(&self) -> IMFMediaType {
+        self.output_type.clone()
     }
 }
 

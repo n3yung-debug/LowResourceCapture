@@ -18,9 +18,12 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
+use windows::Win32::Media::MediaFoundation::IMFMediaType;
+
 use crate::audio::AudioCapture;
 use crate::capture::{CaptureTarget, MonitorCapture};
 use crate::config::{Codec, Config};
+use crate::muxer;
 use crate::ringbuffer::RingBuffer;
 
 /// Commands sent to the engine thread.
@@ -103,6 +106,9 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
     )));
     let mut capture: Option<MonitorCapture> = None;
     let mut audio: Option<AudioCapture> = None;
+    // The video encoder's output media type, needed to mux. Set when capture
+    // starts; kept after stop so a clip right after alt-tab can still save.
+    let mut video_out_type: Option<IMFMediaType> = None;
 
     log::info!("engine started (idle)");
 
@@ -122,7 +128,10 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                         config.encoder.clone(),
                         ring.clone(),
                     ) {
-                        Ok(c) => capture = Some(c),
+                        Ok(c) => {
+                            video_out_type = Some(c.video_output_type());
+                            capture = Some(c);
+                        }
                         Err(e) => log::error!("could not start capture: {e:#}"),
                     }
                     if audio.is_none() {
@@ -143,23 +152,26 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                 audio = None;
             }
             EngineCommand::SaveClip { seconds, label } => {
-                let (frames, kb) = {
-                    let r = ring.lock().unwrap();
-                    (r.extract_last(seconds), r.bytes_used() / 1024)
-                };
+                let frames = ring.lock().unwrap().extract_last(seconds);
                 if frames.is_empty() {
                     log::warn!(
                         "clip '{label}' ({seconds}s) requested but buffer is empty \
-                         (no game captured yet?)"
+                         (start capture first?)"
                     );
                     // TODO(layer 5): toast "Nothing to clip yet".
+                } else if let Some(vtype) = video_out_type.as_ref() {
+                    std::fs::create_dir_all(&config.output_dir).ok();
+                    let path = muxer::clip_filename(&config.output_dir, "clip", seconds);
+                    match muxer::write_clip(&path, vtype, &frames) {
+                        Ok(()) => log::info!(
+                            "saved '{label}' clip: {seconds}s, {} frames -> {}",
+                            frames.len(),
+                            path.display()
+                        ),
+                        Err(e) => log::error!("failed to save clip: {e:#}"),
+                    }
                 } else {
-                    log::info!(
-                        "saving '{label}' clip: {seconds}s, {} frames, {kb} KB buffered",
-                        frames.len(),
-                    );
-                    // TODO(layer 4): hand `frames` (+ matching audio frames) to
-                    // the muxer to write an .mp4 in config.output_dir.
+                    log::warn!("clip '{label}': no encoder output type yet (start capture first)");
                 }
             }
             EngineCommand::ReloadConfig(new_cfg) => {
