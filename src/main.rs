@@ -73,7 +73,7 @@ struct Tray {
     reload_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     output_dir: std::path::PathBuf,
-    config_path_hint: String,
+    config_path: std::path::PathBuf,
 }
 
 fn build_tray(config: &Config) -> Result<Tray> {
@@ -104,7 +104,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
         reload_id: reload.id().clone(),
         quit_id: quit.id().clone(),
         output_dir: config.output_dir.clone(),
-        config_path_hint: "%APPDATA%\\LowResourceCapture\\config.toml".to_string(),
+        config_path: config::config_path().unwrap_or_default(),
     })
 }
 
@@ -175,12 +175,21 @@ fn run_message_loop(
         // Drain any tray menu clicks.
         while let Ok(ev) = menu_rx.try_recv() {
             if ev.id == tray.open_clips_id {
-                open_path(&tray.output_dir.to_string_lossy());
-            } else if ev.id == tray.open_config_id {
-                match config::Config::load_or_create() {
-                    Ok(_) => open_path(&tray.config_path_hint),
-                    Err(e) => log::warn!("could not locate config: {e}"),
+                // Ensure the clips folder actually exists before opening it,
+                // so it always resolves to a real folder under Videos.
+                if let Err(e) = std::fs::create_dir_all(&tray.output_dir) {
+                    log::warn!(
+                        "could not create clips folder {}: {e}",
+                        tray.output_dir.display()
+                    );
                 }
+                open_folder(&tray.output_dir);
+            } else if ev.id == tray.open_config_id {
+                // Make sure config.toml exists, then open it for editing.
+                if let Err(e) = config::Config::load_or_create() {
+                    log::warn!("could not ensure config exists: {e}");
+                }
+                open_file_in_editor(&tray.config_path);
             } else if ev.id == tray.reload_id {
                 match Config::load_or_create() {
                     Ok(cfg) => {
@@ -201,10 +210,18 @@ fn run_message_loop(
     Ok(())
 }
 
-/// Open a folder/file with the shell (Explorer / default handler).
-fn open_path(path: &str) {
+/// Open a folder in Explorer. Pass an absolute path — Explorer does NOT
+/// expand environment variables like `%APPDATA%` from the command line.
+fn open_folder(path: &std::path::Path) {
     // `explorer` returns nonzero even on success for folders; ignore status.
     let _ = std::process::Command::new("explorer").arg(path).spawn();
+}
+
+/// Open a file for editing in Notepad. Reliable for a `.toml` regardless of
+/// file associations (avoids the "how do you want to open this?" prompt), and
+/// takes an absolute path so there's no env-var expansion to go wrong.
+fn open_file_in_editor(path: &std::path::Path) {
+    let _ = std::process::Command::new("notepad").arg(path).spawn();
 }
 
 #[cfg(windows)]

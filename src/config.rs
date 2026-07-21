@@ -183,16 +183,26 @@ impl Config {
 }
 
 /// `%APPDATA%\LowResourceCapture\config.toml`
-fn config_path() -> Result<PathBuf> {
+pub fn config_path() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "LowResourceCapture")
         .context("resolving config directory")?;
     Ok(dirs.config_dir().join("config.toml"))
 }
 
-/// Default clips output: `%USERPROFILE%\Videos\LowResourceCapture`
+/// Default clips output directory.
+///
+/// Prefers a dedicated `D:\Videos` drive when it exists (that's where large
+/// media usually lives), otherwise falls back to the Windows "Videos" known
+/// folder. Either way this is just the *default* — `output_dir` in
+/// config.toml overrides it, so point it wherever you like.
 fn default_output_dir() -> PathBuf {
-    directories::UserDirs::new()
-        .and_then(|d| d.video_dir().map(|v| v.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("LowResourceCapture")
+    let d_videos = PathBuf::from(r"D:\Videos");
+    let base = if d_videos.is_dir() {
+        d_videos
+    } else {
+        directories::UserDirs::new()
+            .and_then(|d| d.video_dir().map(|v| v.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    base.join("LowResourceCapture")
 }
