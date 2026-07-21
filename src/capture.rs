@@ -21,7 +21,7 @@ use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Win32::Foundation::{HMODULE, HWND, POINT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
@@ -214,10 +214,24 @@ fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
         )
         .context("D3D11CreateDevice")?;
     }
-    Ok((
-        device.context("D3D11CreateDevice returned no device")?,
-        context.context("D3D11CreateDevice returned no context")?,
-    ))
+    let device = device.context("D3D11CreateDevice returned no device")?;
+    let context = context.context("D3D11CreateDevice returned no context")?;
+
+    // REQUIRED for sharing this device with Media Foundation via
+    // IMFDXGIDeviceManager: the WGC frame-arrived thread runs VideoProcessorBlt
+    // on the immediate context while the NVENC pump thread locks the same device
+    // through the device manager. Without multithread protection the contexts
+    // race and the process dies with a D3D11 access violation the moment frames
+    // start flowing. See ID3D11Multithread::SetMultithreadProtected (MS docs).
+    if let Ok(mt) = context.cast::<ID3D11Multithread>() {
+        unsafe {
+            mt.SetMultithreadProtected(true.into());
+        }
+    } else {
+        log::warn!("ID3D11Multithread unavailable — D3D11 device not thread-protected");
+    }
+
+    Ok((device, context))
 }
 
 /// Wrap the D3D11 device as a WinRT `IDirect3DDevice` for the frame pool.

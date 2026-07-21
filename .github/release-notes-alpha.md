@@ -1,12 +1,18 @@
-## LowResourceCapture — alpha: it SAVES CLIPS now! 🎬
+## LowResourceCapture — alpha: crash-on-capture fixed 🛠️
 
-**Pressing a clip hotkey now saves a real `.mp4` of the last N seconds.** The
-core "instant replay" recorder works end to end: continuous GPU capture →
-NVENC encode → in-RAM ring buffer → hit a hotkey → muxed to `.mp4` (no
-re-encode, near-instant).
+**Fixes the crash when you hit "Start capture."** The previous build brought the
+HEVC encoder up correctly, then died the instant frames started flowing.
 
-> **Video only for now** — game + mic audio muxing lands in the very next
-> build. Capture is still started from the tray (auto game-detect is L5).
+**Cause:** the one D3D11 GPU device is shared across three threads (WGC capture,
+the BGRA→NV12 converter, and the NVENC encoder via Media Foundation's DXGI
+device manager). Direct3D 11's immediate context isn't thread-safe by default,
+so those threads raced and the process hit an access violation — a hard crash
+that never reached the log. This build enables **D3D11 multithread protection**
+(`ID3D11Multithread::SetMultithreadProtected`), which Media Foundation requires
+whenever a device is shared this way.
+
+> Still **video only** (game + mic audio muxing is the next build). Capture is
+> started from the tray (auto game-detect is L5).
 
 ### Try it
 1. Install (SmartScreen → **More info → Run anyway** — unsigned).
@@ -16,22 +22,16 @@ re-encode, near-instant).
    (all editable in tray → **Settings…**).
 5. Open your clips folder (default `D:\Videos\LowResourceCapture`) and **play
    `clip_<date-time>_<len>s.mp4`**. If it plays back your last N seconds — the
-   whole pipeline works on your GPU. 🎉
+   whole GPU pipeline works. 🎉
 
-The log (`%APPDATA%\LowResourceCapture\lowresourcecapture.log`) shows
-`saved ... clip -> <path>`, whether the encoder used **HEVC** or **H.264**,
-and live encode stats.
+The log (`%APPDATA%\LowResourceCapture\lowresourcecapture.log`) should now show
+`capture->encode: … frames` and `encode: … frames (… keyframes)` ticking every
+second while capturing, then `saved … clip -> <path>` on a hotkey.
 
-### Also in this build
-- Settings GUI (hotkeys, durations, codec, bitrate, buffer).
-- Per-user install; uninstaller keeps your saved clips.
-- Audio is being captured + AAC-encoded already — it just isn't muxed into the
-  `.mp4` yet (next build).
-
-### Coming next
-- **Next build:** game + mic audio in the clips.
-- Then: automatic game detection (no debug menu), a "clip saved" toast,
-  run-at-startup, and a feature-rich clip editor.
+### If it still crashes
+Grab `%APPDATA%\LowResourceCapture\lowresourcecapture.log` — the last lines
+(especially anything with `error`, `failed`, or a `frame … pipeline error`)
+tell me exactly where it stopped.
 
 ### Note
 Unsigned installer — SmartScreen warning is expected.
