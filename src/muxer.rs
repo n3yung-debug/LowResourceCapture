@@ -24,11 +24,7 @@ use crate::ringbuffer::EncodedFrame;
 
 /// Build the output filename: `<game>_<yyyymmdd-hhmmss>_<len>s.mp4`
 pub fn clip_filename(output_dir: &Path, game: &str, len_secs: u32) -> PathBuf {
-    let st = unsafe {
-        let mut s = Default::default();
-        GetLocalTime(&mut s);
-        s
-    };
+    let st = unsafe { GetLocalTime() };
     let stamp = format!(
         "{:04}{:02}{:02}-{:02}{:02}{:02}",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond

@@ -150,7 +150,7 @@ fn capture_loop(
         let client: IAudioClient = device.Activate(CLSCTX_ALL, None).context("Activate")?;
 
         let mix = client.GetMixFormat().context("GetMixFormat")?;
-        let (rate, src_channels, src_bits, src_block) = {
+        let (rate, src_channels, src_bits, _src_block) = {
             let w = &*mix;
             (w.nSamplesPerSec, w.nChannels, w.wBitsPerSample, w.nBlockAlign)
         };
