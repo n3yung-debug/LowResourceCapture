@@ -1,12 +1,21 @@
 name: release
 
-# On a version tag (e.g. v0.1.0-alpha): build the release exe, compile the
-# Inno Setup installer, and publish a GitHub prerelease with the installer
-# attached. One tag = one downloadable installer.
+# Two ways to cut a release:
+#   * push a version tag (e.g. v0.1.0-alpha), or
+#   * run this workflow manually (workflow_dispatch) with a version input.
+# Either way: build the release exe, compile the Inno Setup installer, and
+# publish a GitHub prerelease with the installer attached. On manual dispatch
+# the tag is created by the release step at the built commit.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without leading v, e.g. 0.1.0-alpha"
+        required: true
+        default: "0.1.0-alpha"
 
 permissions:
   contents: write
@@ -26,13 +35,23 @@ jobs:
       - name: Test
         run: cargo test --release
 
-      - name: Derive version from tag
+      - name: Resolve version and tag
         id: ver
         shell: pwsh
         run: |
-          $v = "${{ github.ref_name }}".TrimStart('v')
-          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "Version: $v"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $v = "${{ github.event.inputs.version }}"
+            $tag = "v$v"
+            $target = "${{ github.sha }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+            $v = $tag.TrimStart('v')
+            $target = ""
+          }
+          "version=$v"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "tag=$tag"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "target=$target" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "Resolved tag=$tag version=$v target=$target"
 
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
@@ -50,8 +69,14 @@ jobs:
         run: |
           $installer = "installer\Output\LowResourceCapture-Setup-${{ steps.ver.outputs.version }}.exe"
           if (-not (Test-Path $installer)) { throw "installer not found: $installer" }
-          gh release create "${{ github.ref_name }}" `
-            "$installer" `
-            --title "LowResourceCapture ${{ github.ref_name }}" `
-            --notes-file ".github/release-notes-alpha.md" `
-            --prerelease
+          $relArgs = @(
+            "${{ steps.ver.outputs.tag }}",
+            "$installer",
+            "--title", "LowResourceCapture ${{ steps.ver.outputs.tag }}",
+            "--notes-file", ".github/release-notes-alpha.md",
+            "--prerelease"
+          )
+          if ("${{ steps.ver.outputs.target }}" -ne "") {
+            $relArgs += @("--target", "${{ steps.ver.outputs.target }}")
+          }
+          gh release create @relArgs
