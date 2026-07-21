@@ -6,6 +6,7 @@
 mod audio;
 mod capture;
 mod config;
+mod convert;
 mod encoder;
 mod engine;
 mod game_detect;
