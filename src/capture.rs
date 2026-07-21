@@ -29,12 +29,11 @@ use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
-use windows::Win32::Media::MediaFoundation::IMFSample;
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 
 use crate::config::EncoderConfig;
 use crate::convert::Nv12Converter;
-use crate::encoder::{make_nv12_sample, EncoderPump, VideoEncoder};
+use crate::encoder::{EncoderPump, FrameMsg, VideoEncoder};
 use crate::ringbuffer::RingBuffer;
 
 /// A running WGC capture of the primary monitor. Holds every COM object alive
@@ -142,7 +141,7 @@ impl Drop for MonitorCapture {
 fn process_frame(
     frame: &Direct3D11CaptureFrame,
     converter: &Nv12Converter,
-    tx: &std::sync::mpsc::Sender<IMFSample>,
+    tx: &std::sync::mpsc::Sender<FrameMsg>,
     dur_100ns: i64,
 ) -> Result<()> {
     let bgra = frame_texture(frame)?;
@@ -150,8 +149,8 @@ fn process_frame(
     let nv12 = converter.create_nv12_texture()?;
     converter.convert(&bgra, &nv12)?;
     let ts = frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0);
-    let sample = make_nv12_sample(&nv12, ts, dur_100ns)?;
-    let _ = tx.send(sample);
+    // The pump thread builds the IMFSample; we only send the (Send) texture.
+    let _ = tx.send((nv12, ts, dur_100ns));
     Ok(())
 }
 

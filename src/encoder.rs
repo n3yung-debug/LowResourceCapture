@@ -20,16 +20,15 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use windows::core::Interface;
-use windows::Win32::Foundation::BOOL;
+use windows::core::{Interface, BOOL};
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
     IMFTransform, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
     MFCreateSample, MFStartup, MFTEnumEx, MFMediaType_Video, MFSampleExtension_CleanPoint,
     MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
-    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT,
+    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
     MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER,
     MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
     MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
@@ -56,6 +55,21 @@ const MF_EVENT_FLAG_NO_WAIT: u32 = 0x0000_0001;
 fn pack(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | (lo as u64)
 }
+
+/// What the capture side sends the pump: an NV12 GPU texture (which IS `Send`
+/// in windows-rs) plus its presentation time and duration. The `IMFSample` is
+/// created inside the pump thread, avoiding sending non-`Send` MF interfaces.
+pub type FrameMsg = (ID3D11Texture2D, i64, i64);
+
+/// The pump thread's Media Foundation interfaces. MF interfaces are not `Send`
+/// in windows-rs, but the NVENC MFT is used single-threaded within the pump,
+/// so moving them to that one thread is sound.
+struct PumpCom {
+    transform: IMFTransform,
+    event_gen: IMFMediaEventGenerator,
+    _device_manager: IMFDXGIDeviceManager,
+}
+unsafe impl Send for PumpCom {}
 
 /// A configured hardware encoder, ready to start pumping.
 pub struct VideoEncoder {
@@ -150,16 +164,21 @@ impl VideoEncoder {
             ..
         } = self;
 
-        let (tx, rx) = std::sync::mpsc::channel::<IMFSample>();
+        let (tx, rx) = std::sync::mpsc::channel::<FrameMsg>();
         let shutdown = Arc::new(AtomicBool::new(false));
         let sd = shutdown.clone();
+
+        let com = PumpCom {
+            transform,
+            event_gen,
+            _device_manager: device_manager,
+        };
 
         let thread = std::thread::Builder::new()
             .name("nvenc-pump".into())
             .spawn(move || {
-                // Keep the device manager alive for the encoder's lifetime.
-                let _keep = device_manager;
-                pump_loop(&transform, &event_gen, &rx, &ring, &sd);
+                let com = com; // hold all MF interfaces on this thread
+                pump_loop(&com.transform, &com.event_gen, &rx, &ring, &sd);
             })
             .expect("spawn nvenc pump thread");
 
@@ -174,15 +193,15 @@ impl VideoEncoder {
 
 /// Live encoder pump: submit NV12 samples, stops on drop.
 pub struct EncoderPump {
-    input_tx: Sender<IMFSample>,
+    input_tx: Sender<FrameMsg>,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     pub codec: Codec,
 }
 
 impl EncoderPump {
-    /// A cloned sender for the capture callback to submit NV12 samples.
-    pub fn sender(&self) -> Sender<IMFSample> {
+    /// A cloned sender for the capture callback to submit NV12 frames.
+    pub fn sender(&self) -> Sender<FrameMsg> {
         self.input_tx.clone()
     }
 }
@@ -212,7 +231,7 @@ pub fn make_nv12_sample(tex: &ID3D11Texture2D, pts_100ns: i64, dur_100ns: i64) -
 fn pump_loop(
     transform: &IMFTransform,
     event_gen: &IMFMediaEventGenerator,
-    rx: &Receiver<IMFSample>,
+    rx: &Receiver<FrameMsg>,
     ring: &Arc<Mutex<RingBuffer>>,
     shutdown: &AtomicBool,
 ) {
@@ -229,9 +248,11 @@ fn pump_loop(
         // Satisfy any outstanding input requests with captured frames.
         if pending_input > 0 {
             match rx.try_recv() {
-                Ok(sample) => {
-                    if unsafe { transform.ProcessInput(0, &sample, 0) }.is_ok() {
-                        pending_input -= 1;
+                Ok((tex, pts, dur)) => {
+                    if let Ok(sample) = make_nv12_sample(&tex, pts, dur) {
+                        if unsafe { transform.ProcessInput(0, &sample, 0) }.is_ok() {
+                            pending_input -= 1;
+                        }
                     }
                 }
                 Err(TryRecvError::Empty) => {}
@@ -239,7 +260,9 @@ fn pump_loop(
             }
         }
 
-        match unsafe { event_gen.GetEvent(MF_EVENT_FLAG_NO_WAIT) } {
+        match unsafe {
+            event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(MF_EVENT_FLAG_NO_WAIT))
+        } {
             Ok(event) => {
                 let met = unsafe { event.GetType() }.unwrap_or(0);
                 if met == ME_TRANSFORM_NEED_INPUT {
