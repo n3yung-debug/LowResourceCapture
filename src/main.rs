@@ -67,7 +67,15 @@ fn run() -> Result<()> {
     // Build the tray icon + menu.
     let tray = build_tray(&config)?;
 
-    log::info!("ready; sitting in the tray. Press a clip hotkey while in a game.");
+    // Capture continuously while the app is open, so the last N seconds are
+    // always ready to clip — no manual start needed. (Dropping/quitting stops
+    // it; the debug menu can still start/stop manually.)
+    let _ = engine_tx.send(EngineCommand::StartCapture {
+        window_title: "(auto: primary monitor)".to_string(),
+        with_audio: true,
+    });
+
+    log::info!("ready; capturing. Press a clip hotkey to save the last N seconds.");
 
     // Pump the Win32 message loop and route hotkey + menu events.
     run_message_loop(&mut router, &engine_tx, &tray)?;

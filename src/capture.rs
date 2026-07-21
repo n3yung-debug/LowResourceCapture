@@ -144,6 +144,14 @@ impl MonitorCapture {
             .FrameArrived(&handler)
             .context("register FrameArrived")?;
 
+        // Remove the yellow "recording" border (Win11 privacy indicator).
+        // Best-effort: if the OS build/policy disallows it, capture still works
+        // and the border just stays.
+        match session.SetIsBorderRequired(false) {
+            Ok(()) => log::info!("capture border disabled"),
+            Err(e) => log::warn!("could not disable capture border (older Windows?): {e:?}"),
+        }
+
         session.StartCapture().context("StartCapture")?;
         log::info!("monitor capture started: {width}x{height}");
 
