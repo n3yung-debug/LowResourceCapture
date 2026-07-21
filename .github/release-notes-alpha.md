@@ -1,34 +1,32 @@
-## LowResourceCapture — alpha (foundation + settings GUI)
+## LowResourceCapture — alpha (capture + NVENC encode works!)
 
-**Still a pre-release. It does NOT save clips yet** — the capture/encode
-pipeline is mid-build (Layer 2). This build is for trying the install flow and
-the new **settings GUI**.
+**The core recorder now works end to end in RAM.** Screen capture → GPU NV12
+conversion → **NVENC hardware encode** → encoded footage living in the ring
+buffer. Saving to `.mp4` (Layer 4) and audio (Layer 3) are still to come, so
+this is a **validation build**, not a finished clipper yet.
 
-### New in this build
-- **Settings GUI** — right-click the tray icon → **Settings…**. A window to:
-  - Edit each clip preset's **name**, **duration** (type a number or pick from a
-    15-second-interval dropdown), and **hotkey** (click "Set", then press the
-    key/combo you want — e.g. Ctrl+Shift+F9).
-  - Adjust output folder, codec (HEVC/H.264), bitrate, fps, and buffer caps.
-  - On close, hotkeys re-register **live** — no restart needed.
+### Try the capture pipeline (debug)
+1. Install and let it sit in the tray.
+2. Right-click the tray icon → **Start capture (debug)** (captures your
+   primary monitor).
+3. Wait ~5 seconds.
+4. Right-click → **Dump raw buffer (debug)**.
+5. Open your clips folder (default `D:\Videos\LowResourceCapture`) and play the
+   `debug_*.hevc` (or `.h264`) file in **VLC**. If you see your screen — the
+   whole capture→encode pipeline works on your GPU. 🎉
+6. The log at `%APPDATA%\LowResourceCapture\lowresourcecapture.log` shows
+   **`encoder ready: HEVC`** vs **`H.264`** (which your GPU gave), plus
+   per-second `encode: N frames` stats and buffer size.
 
-### What works
-- Per-user install (no admin), Start Menu shortcut, optional run-at-startup,
-  clean uninstaller that **keeps your saved clips**.
-- Tray menu: Settings… / Open clips folder / Reload / Quit.
-- Global clip hotkeys (default F9=15s, F10=30s, F11=60s), editable in the GUI.
-- Hotkey presses are logged to
-  `%APPDATA%\LowResourceCapture\lowresourcecapture.log`.
+### Also in this build
+- **Settings GUI** (tray → Settings…): edit clip presets (name, duration,
+  click-to-capture hotkey) + codec/bitrate/fps/buffer; applies live on close.
+- Per-user install, clean uninstaller that keeps your saved clips.
 
 ### What does NOT work yet
-- **No saved clips.** Screen capture + NV12 conversion are in (Layers 2a/2b),
-  but NVENC encoding (2c), saving to .mp4 (Layer 4), and audio (Layer 3) are
-  not done. Pressing a clip hotkey logs "buffer is empty" — expected.
-
-### Coming next
-- L2c: NVENC HEVC encode into the ring buffer (first real footage).
-- L2d: debug "dump raw .hevc" to view captured footage.
-- L4: save to .mp4. Then a feature-rich clip editor in the same GUI window.
+- **No `.mp4` clips on hotkey yet** — that's Layer 4 (mux the buffered frames
+  to mp4). No audio yet (Layer 3). Capture currently targets the whole primary
+  monitor (per-game window + fps throttle is Layer 2e).
 
 ### Note
 Unsigned installer — SmartScreen may warn "unknown publisher." Choose
