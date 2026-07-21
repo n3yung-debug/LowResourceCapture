@@ -29,7 +29,7 @@ anyhow = "1"
 # against docs.rs 2026-07-21.
 wry = "0.55"    # 0.55.1
 tao = "0.35"    # 0.35.3
-log = "0.4"
+log = { version = "0.4", features = ["std"] }  # set_boxed_logger needs `std`
 directories = "5"
 
 # windows-rs: only the feature namespaces we actually touch, to keep the
@@ -44,6 +44,7 @@ features = [
     "Win32_System_Ole",
     "Win32_System_Variant",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",  # SetUnhandledExceptionFilter + EXCEPTION_POINTERS live here
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_WinRT",
