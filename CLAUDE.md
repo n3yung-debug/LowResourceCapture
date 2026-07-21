@@ -26,12 +26,24 @@ minimal CPU/GPU/RAM.
 |---|---|---|
 | Language/stack | Rust + windows-rs | agreed |
 | Capture | Windows.Graphics.Capture (GPU frames, no CPU copy) | agreed |
+| Capture target | **Primary monitor** (NOT per-game window) | confirmed on-device 2026-07-21 |
 | Encode | NVENC HEVC (H.265) | agreed |
 | Buffer | In-RAM, time- **and** RAM-capped | agreed |
 | Save model | Retroactive ring buffer (last N seconds) | agreed |
 | Hotkeys | One key per length (F9/F10/F11), configurable | agreed |
 | Audio | Game + mic, separate tracks | agreed |
-| Game detect | Fullscreen-foreground heuristic + allow/block lists | agreed |
+| Game detect | Drives capture **start/stop** only; target stays the monitor | agreed |
+| Capture lifetime | Always-on while the app is open (auto-start on launch) | confirmed on-device 2026-07-21 |
+
+- **Monitor-capture rationale (Nick, on-device):** capturing the whole primary
+  monitor survives alt-tabbing between fullscreen apps mid-clip (one continuous
+  stream, constant resolution). L5 game-detect will gate start/stop around
+  games rather than switching the capture target to a game window.
+- **Pipeline runtime-verified on Nick's PC (2026-07-21, v0.1.8+):** WGC capture
+  → NVENC HEVC encode → in-RAM ring → IMFSinkWriter mp4 save produces a clip
+  that plays in VLC. The yellow WGC border is disabled via
+  `GraphicsCaptureSession::SetIsBorderRequired(false)`. This graduates L2–L4a
+  from "compiles" to VERIFIED on-hardware.
 
 ## Verified facts
 

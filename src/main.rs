@@ -143,28 +143,11 @@ fn build_tray(config: &Config) -> Result<Tray> {
     })
 }
 
-/// A minimal 32x32 icon generated in code (a red dot) so we ship no asset
-/// files. Swap for a real .ico later.
+/// The app icon (32x32 RGBA), generated from `assets/icon.ico` and embedded so
+/// the tray icon matches the exe/installer icon with no runtime asset files.
 fn make_tray_icon() -> tray_icon::Icon {
-    const S: u32 = 32;
-    let mut rgba = vec![0u8; (S * S * 4) as usize];
-    let c = (S as f32 - 1.0) / 2.0;
-    let r = S as f32 * 0.40;
-    for y in 0..S {
-        for x in 0..S {
-            let dx = x as f32 - c;
-            let dy = y as f32 - c;
-            let inside = (dx * dx + dy * dy).sqrt() <= r;
-            let i = ((y * S + x) * 4) as usize;
-            if inside {
-                rgba[i] = 0xE0; // R
-                rgba[i + 1] = 0x2B; // G
-                rgba[i + 2] = 0x2B; // B
-                rgba[i + 3] = 0xFF; // A
-            }
-        }
-    }
-    tray_icon::Icon::from_rgba(rgba, S, S).expect("building tray icon")
+    const RGBA: &[u8] = include_bytes!("../assets/tray-32.rgba");
+    tray_icon::Icon::from_rgba(RGBA.to_vec(), 32, 32).expect("building tray icon")
 }
 
 fn run_message_loop(

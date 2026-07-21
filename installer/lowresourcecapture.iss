@@ -29,6 +29,8 @@ DefaultDirName={commonpf32}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#MyAppExe}
+; App icon for the setup wizard (the exe carries its own embedded icon).
+SetupIconFile=..\assets\icon.ico
 OutputDir=Output
 OutputBaseFilename=LowResourceCapture-Setup-{#MyAppVersion}
 Compression=lzma2
@@ -87,5 +89,8 @@ Filename: "{cmd}"; Parameters: "/C taskkill /IM {#MyAppExe} /F & exit 0"; Flags:
 ; folder and are intentionally left untouched.
 Type: filesandordirs; Name: "{app}\logs"
 Type: files; Name: "{app}\config.toml"
+; WebView2 runtime data folder, created next to the exe when the settings
+; window opens. Not needed after uninstall — remove it for a clean uninstall.
+Type: filesandordirs; Name: "{app}\{#MyAppExe}.WebView2"
 ; Also clean up the old per-user data location from previous versions.
 Type: filesandordirs; Name: "{userappdata}\{#MyAppName}"
