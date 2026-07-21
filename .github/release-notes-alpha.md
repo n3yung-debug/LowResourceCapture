@@ -1,47 +1,33 @@
-## LowResourceCapture — alpha: found it, both bugs fixed 🎯
+## LowResourceCapture — alpha: microphone toggle 🎙️
 
-The diagnostic build did its job — the log pinpointed **two** separate bugs, and
-this build fixes both. This should be the first build that actually captures and
-saves a clip.
+### What audio is captured
+The recorder captures **both**:
+- **Everything you hear** — desktop/game audio via loopback of your default
+  output device (your headphones).
+- **Your microphone** — on a **separate track**.
 
-### Bug #1 — the crash (audio) ✅ fixed
-The crash was in the **microphone** encoder. The log's last line was an
-`UNHANDLED EXCEPTION (access violation)` on the mic thread, right after it fed
-the first audio buffer to the AAC encoder. Cause: the AAC encoder is a
-*synchronous* encoder that doesn't allocate its own output buffers — the app has
-to provide them, and it was handing over a null buffer. Now it allocates a
-proper output buffer (sized from the encoder), so draining AAC no longer
-crashes.
+*(Neither is muxed into the saved `.mp4` yet — that's the next step, L4b — but
+both are captured and encoded.)*
 
-### Bug #2 — no frames were ever captured ✅ fixed
-Even in video-only mode, the log showed **`encode: 0 frames`** the entire time —
-not one frame made it through. The frame-rate limiter started from a sentinel
-value and used wrapping math that underflowed on **every** frame, so it dropped
-100% of them (which is why the buffer was always empty and clips wouldn't save).
-One-line fix. Frames should now flow.
+### New: microphone ON/OFF toggle
+Tray → **Settings…** → **Audio** now has a **Record microphone** switch:
+- **Green ON** = your mic is captured (separate track).
+- **Red OFF** = mic off; only desktop/game audio is captured.
 
----
+This is the app's standard on/off control — a real toggle, not a checkbox — and
+any future on/off option will use the same switch.
 
-## Please test (this is the real end-to-end run) 🎮
-1. Install over the top (SmartScreen → *More info → Run anyway*, then UAC → *Yes*).
-2. Tray → **Start capture (debug)** (video **+** audio — the one that used to crash).
-3. Wait ~5–10 seconds (move some windows / play something so there's motion).
-4. Press **F9** (15s).
-5. Open **`<Videos>\LowResourceCapture\<source>\`** and play `clip_*.mp4`.
+> Includes everything from v0.1.8: the crash fix (mic AAC encoder) and the
+> frame-throttle fix, so capture actually records now.
 
-The log (`C:\Program Files (x86)\LowResourceCapture\logs\lowresourcecapture.log`)
-should now show `FrameArrived: first callback fired`, `frame1: …` markers, then
-`encode: N frames` with **N climbing**, and finally `saved 'Short' clip -> …` on
-F9.
+### Try it
+1. Install over the top.
+2. Tray → **Settings…** → **Audio** → flip **Record microphone** OFF, **Save**.
+3. Tray → **Start capture (debug)** — the log should now show **no** mic worker
+   starting (only the desktop-audio worker), confirming the toggle took effect.
+4. Flip it back **ON** in Settings to record your mic again.
 
-> Still **video only** in the saved `.mp4` (audio muxing is the next step, L4b) —
-> but audio is now being captured + encoded without crashing. If this build
-> saves a playable clip, the whole capture→encode→ring→save pipeline is proven.
-
-### The `lowresourcecapture.exe.WebView2` folder
-That's harmless — it's the WebView2 runtime's data folder, created when the
-settings window opens. I can relocate it out of the install folder in a later
-build if you'd like it tidier; it doesn't affect anything.
+Settings changes apply the next time capture starts.
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.

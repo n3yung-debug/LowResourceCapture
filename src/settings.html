@@ -8,7 +8,7 @@
   :root {
     --bg: #16181d; --panel: #1e2128; --panel2: #262a33; --border: #333846;
     --text: #e6e8ec; --muted: #9aa0ac; --accent: #e02b2b; --accent2: #ff5a5a;
-    --ok: #2ecc71; --field: #12141a;
+    --ok: #2ecc71; --danger: #e5484d; --field: #12141a;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
@@ -73,6 +73,31 @@
   .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px;
     text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 8px; }
+
+  /* Reusable ON/OFF switch — the standard on/off control (no checkboxes). */
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .toggle-label { font-size: 14px; color: var(--text); }
+  .toggle {
+    --w: 78px; --h: 30px;
+    position: relative; flex: none; width: var(--w); height: var(--h);
+    padding: 0; border: none; border-radius: 999px; cursor: pointer;
+    background: var(--danger); transition: background .16s ease;
+    font-weight: 700; font-size: 12px; letter-spacing: .08em; color: #fff;
+  }
+  .toggle:focus { outline: 2px solid var(--accent2); outline-offset: 2px; }
+  .toggle .knob {
+    position: absolute; top: 3px; left: 3px;
+    width: calc(var(--h) - 6px); height: calc(var(--h) - 6px);
+    border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.45); transition: left .16s ease;
+  }
+  .toggle .txt { position: absolute; top: 50%; transform: translateY(-50%); }
+  .toggle .txt-on  { left: 13px; display: none; }
+  .toggle .txt-off { right: 12px; }
+  .toggle[aria-checked="true"] { background: var(--ok); }
+  .toggle[aria-checked="true"] .knob { left: calc(var(--w) - var(--h) + 3px); }
+  .toggle[aria-checked="true"] .txt-on  { display: block; }
+  .toggle[aria-checked="true"] .txt-off { display: none; }
 </style>
 </head>
 <body>
@@ -85,6 +110,21 @@
     <div class="section-title">Clip presets</div>
     <div id="presets"></div>
     <button class="add-btn" id="addBtn">+ Add preset</button>
+
+    <div class="section-title">Audio</div>
+    <div class="adv">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Record microphone</div>
+          <div class="hint">Your mic on a separate track. Desktop/game audio (everything you hear) is always captured.</div>
+        </div>
+        <button class="toggle" id="micToggle" role="switch" aria-checked="true" title="Toggle microphone recording">
+          <span class="knob"></span>
+          <span class="txt txt-on">ON</span>
+          <span class="txt txt-off">OFF</span>
+        </button>
+      </div>
+    </div>
 
     <details>
       <summary>Advanced</summary>
@@ -224,6 +264,19 @@
     { name: 'Long', seconds: 60, hotkey: 'F11' },
   ]).forEach(makePreset);
 
+  // Reusable ON/OFF toggle: click flips aria-checked (green ON / red OFF).
+  function initToggle(el) {
+    el.addEventListener('click', () => {
+      const on = el.getAttribute('aria-checked') === 'true';
+      el.setAttribute('aria-checked', on ? 'false' : 'true');
+    });
+  }
+  const micToggle = document.getElementById('micToggle');
+  initToggle(micToggle);
+  // Mic is on when the saved audio mode includes the mic.
+  const micOn = ['gameandmicseparate', 'gameandmicmixed'].includes((cfg.audio || 'gameandmicseparate').toLowerCase());
+  micToggle.setAttribute('aria-checked', micOn ? 'true' : 'false');
+
   document.getElementById('outputDir').value = cfg.output_dir || '';
   document.getElementById('codec').value = (cfg.encoder && cfg.encoder.codec) || 'hevc';
   document.getElementById('bitrate').value = (cfg.encoder && cfg.encoder.bitrate_mbps) || 40;
@@ -242,6 +295,7 @@
     send({
       cmd: 'save',
       presets,
+      mic_enabled: micToggle.getAttribute('aria-checked') === 'true',
       output_dir: document.getElementById('outputDir').value.trim(),
       codec: document.getElementById('codec').value,
       bitrate_mbps: parseInt(document.getElementById('bitrate').value) || 40,

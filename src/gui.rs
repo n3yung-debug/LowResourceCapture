@@ -16,7 +16,7 @@ use tao::window::WindowBuilder;
 use wry::http::Request;
 use wry::WebViewBuilder;
 
-use crate::config::{ClipPreset, Codec, Config};
+use crate::config::{AudioMode, ClipPreset, Codec, Config};
 
 const SETTINGS_HTML: &str = include_str!("settings.html");
 
@@ -34,6 +34,7 @@ struct PresetIn {
 #[derive(Deserialize)]
 struct SaveMsg {
     presets: Vec<PresetIn>,
+    mic_enabled: Option<bool>,
     output_dir: Option<String>,
     codec: Option<String>,
     bitrate_mbps: Option<u32>,
@@ -134,6 +135,15 @@ fn apply_and_save(config: &mut Config, m: SaveMsg) {
                 hotkey: p.hotkey,
             })
             .collect();
+    }
+    if let Some(mic) = m.mic_enabled {
+        // Toggle mic capture on/off while always keeping desktop/game audio.
+        // Preserve a "mixed" choice when the mic stays on.
+        config.audio = match (mic, config.audio) {
+            (true, AudioMode::GameAndMicMixed) => AudioMode::GameAndMicMixed,
+            (true, _) => AudioMode::GameAndMicSeparate,
+            (false, _) => AudioMode::GameOnly,
+        };
     }
     if let Some(d) = m.output_dir {
         if !d.trim().is_empty() {
