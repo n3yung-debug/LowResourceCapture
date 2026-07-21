@@ -53,10 +53,11 @@ fn run() -> Result<()> {
     log::info!("ready; sitting in the tray. Press a clip hotkey while in a game.");
 
     // Pump the Win32 message loop and route hotkey + menu events.
-    // NOTE(first build): the exact `GetMessageW` argument types can differ by
-    // one wrapper (`Option<HWND>` vs `HWND`) across windows-rs point releases —
-    // this is the single most likely spot to need a one-line tweak on your
-    // first `cargo build`. Everything downstream is independent of it.
+    // `GetMessageW`'s hwnd param is `Option<HWND>` in windows 0.62 (verified
+    // on the official windows-docs-rs binding), so the `None` we pass in
+    // `run_message_loop` is correct. The likelier first-build friction is
+    // any API drift in tray-icon 0.24 / global-hotkey 0.8 (both newer than
+    // when this was written) — see the confidence note in the README.
     run_message_loop(&router, &engine_tx, &tray)?;
 
     engine_handle.shutdown();

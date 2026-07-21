@@ -30,6 +30,11 @@ heavy runs until a game is detected.
 ## Defaults
 
 - **Codec:** HEVC (H.265) via NVENC — smaller files, best quality/bitrate.
+  (Correction vs. an earlier claim: HEVC is *marginally heavier* to encode
+  than H.264, not lighter — but the delta is negligible on the dedicated
+  NVENC block, single-digit % GPU, while HEVC roughly halves bitrate for the
+  same quality. So it stays the "light + best quality" pick. AV1 is an even
+  better option this Blackwell GPU supports — a future codec choice.)
 - **Buffer:** in-RAM, capped at 120 s / 1 GB (configurable).
 - **Hotkeys:** `F9` = 15 s, `F10` = 30 s, `F11` = 60 s (all configurable).
 - **Audio:** game + mic as **separate tracks**.
@@ -103,9 +108,15 @@ your machine validates real progress.
   eviction/keyframe-snap/RAM-cap, game-detection allow/block/fullscreen rules.
 - **UNVERIFIED until you build on Windows:** everything touching `windows-rs`
   (tray/message-loop, and all of layers 2–5). Written to be correct but not
-  yet compiler- or hardware-checked. The most likely first-build fixup is the
-  `GetMessageW` call in `src/main.rs` (a one-line wrapper difference across
-  windows-rs point releases) — flagged inline in the code.
+  yet compiler- or hardware-checked. The `GetMessageW(None, ...)` call is
+  confirmed correct against the windows 0.62 binding; the likelier first-build
+  friction is minor API drift in `tray-icon` 0.24 / `global-hotkey` 0.8 (the
+  menu-builder or event-receiver calls), which a compile error will pinpoint.
+
+### Verified crate versions (docs.rs, 2026-07-21)
+
+Pinned to current releases, confirmed against the registry (not a search
+summary): `windows` 0.62.2, `tray-icon` 0.24.1, `global-hotkey` 0.8.0.
 
 ---
 
