@@ -12,15 +12,17 @@
 //! step answers empirically (logged at startup).
 
 use anyhow::{Context, Result};
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Media::MediaFoundation::{
-    IMFActivate, IMFMediaType, IMFTransform, MFCreateMediaType, MFStartup, MFTEnumEx,
-    MFMediaType_Video, MFVideoFormat_H264,
-    MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    IMFActivate, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFTransform,
+    MFCreateDXGIDeviceManager, MFCreateMediaType, MFStartup, MFTEnumEx, MFMediaType_Video,
+    MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
     MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
-    MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE,
-    MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
-    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER, MFT_REGISTER_TYPE_INFO,
+    MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_TRANSFORM_ASYNC_UNLOCK,
 };
 use windows::Win32::System::Com::CoTaskMemFree;
 
@@ -40,7 +42,10 @@ fn pack(hi: u32, lo: u32) -> u64 {
 /// A configured hardware video encoder. The async pump (L2c-2) will drive this
 /// transform to produce encoded frames.
 pub struct VideoEncoder {
+    // Held for the async pump (L2c-2b). Kept alive; not yet driven.
     _transform: IMFTransform,
+    _device_manager: IMFDXGIDeviceManager,
+    _event_gen: IMFMediaEventGenerator,
     /// The codec we actually got (may differ from requested if HEVC hardware
     /// encoding isn't available and we fell back to H.264).
     pub codec: Codec,
@@ -51,7 +56,7 @@ pub struct VideoEncoder {
 impl VideoEncoder {
     /// Enumerate + configure a hardware encoder for the given size/settings.
     /// Tries HEVC first (unless H.264 was requested), falling back to H.264.
-    pub fn new(_device: &ID3D11Device, width: u32, height: u32, cfg: &EncoderConfig) -> Result<Self> {
+    pub fn new(device: &ID3D11Device, width: u32, height: u32, cfg: &EncoderConfig) -> Result<Self> {
         unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("MFStartup")?;
 
         // Try requested codec first, then the other as fallback.
@@ -77,8 +82,37 @@ impl VideoEncoder {
         let (transform, codec) =
             chosen.context("no hardware HEVC or H.264 encoder MFT available")?;
 
+        // Unlock the async hardware MFT before use.
+        unsafe {
+            let attrs = transform.GetAttributes().context("GetAttributes")?;
+            attrs.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
+        }
+
+        // Bind a DXGI device manager (shared D3D11 device) so the encoder takes
+        // GPU textures as input — zero-copy from capture.
+        let mut token = 0u32;
+        let mut manager: Option<IMFDXGIDeviceManager> = None;
+        unsafe { MFCreateDXGIDeviceManager(&mut token, &mut manager) }
+            .context("MFCreateDXGIDeviceManager")?;
+        let device_manager = manager.context("null DXGI device manager")?;
+        unsafe { device_manager.ResetDevice(device, token) }.context("ResetDevice")?;
+        unsafe {
+            transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, device_manager.as_raw() as usize)
+        }
+        .context("SET_D3D_MANAGER")?;
+
         configure(&transform, codec, width, height, cfg)
             .with_context(|| format!("configuring {} encoder", codec_name(codec)))?;
+
+        // Begin streaming so the MFT starts requesting input.
+        unsafe {
+            transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+        }
+
+        let event_gen: IMFMediaEventGenerator = transform
+            .cast()
+            .context("IMFTransform -> IMFMediaEventGenerator")?;
 
         log::info!(
             "encoder ready: {} {}x{} @ {}fps, {} Mbps",
@@ -91,6 +125,8 @@ impl VideoEncoder {
 
         Ok(Self {
             _transform: transform,
+            _device_manager: device_manager,
+            _event_gen: event_gen,
             codec,
             width,
             height,
