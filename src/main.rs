@@ -10,9 +10,13 @@ mod convert;
 mod encoder;
 mod engine;
 mod game_detect;
+mod gui;
 mod hotkeys;
 mod muxer;
 mod ringbuffer;
+
+/// Custom thread message: settings GUI closed → reload config + hotkeys.
+const WM_RELOAD: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
 
 use anyhow::Result;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
@@ -37,6 +41,13 @@ fn main() {
 
 fn run() -> Result<()> {
     init_logging();
+
+    // Second process mode: show the settings window instead of the tray app.
+    if std::env::args().any(|a| a == "--gui") {
+        log::info!("launching settings GUI");
+        return gui::run();
+    }
+
     log::info!("LowResourceCapture starting");
 
     let config = Config::load_or_create()?;
@@ -45,8 +56,9 @@ fn run() -> Result<()> {
     // Start the capture engine (idle until a game is detected).
     let (engine_handle, engine_tx) = engine::spawn(config.clone());
 
-    // Register the clip hotkeys.
-    let router = HotkeyRouter::register(&config)?;
+    // Register the clip hotkeys. Held in an Option so we can drop-and-rebuild
+    // them live when settings change.
+    let mut router = Some(HotkeyRouter::register(&config)?);
 
     // Build the tray icon + menu.
     let tray = build_tray(&config)?;
@@ -54,12 +66,7 @@ fn run() -> Result<()> {
     log::info!("ready; sitting in the tray. Press a clip hotkey while in a game.");
 
     // Pump the Win32 message loop and route hotkey + menu events.
-    // `GetMessageW`'s hwnd param is `Option<HWND>` in windows 0.62 (verified
-    // on the official windows-docs-rs binding), so the `None` we pass in
-    // `run_message_loop` is correct. The likelier first-build friction is
-    // any API drift in tray-icon 0.24 / global-hotkey 0.8 (both newer than
-    // when this was written) — see the confidence note in the README.
-    run_message_loop(&router, &engine_tx, &tray)?;
+    run_message_loop(&mut router, &engine_tx, &tray)?;
 
     engine_handle.shutdown();
     log::info!("exited cleanly");
@@ -69,27 +76,26 @@ fn run() -> Result<()> {
 /// The tray menu items we need to compare events against.
 struct Tray {
     _icon: tray_icon::TrayIcon,
+    settings_id: tray_icon::menu::MenuId,
     open_clips_id: tray_icon::menu::MenuId,
-    open_config_id: tray_icon::menu::MenuId,
     reload_id: tray_icon::menu::MenuId,
     start_capture_id: tray_icon::menu::MenuId,
     stop_capture_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     output_dir: std::path::PathBuf,
-    config_path: std::path::PathBuf,
 }
 
 fn build_tray(config: &Config) -> Result<Tray> {
     let menu = Menu::new();
+    let settings = MenuItem::new("Settings…", true, None);
     let open_clips = MenuItem::new("Open clips folder", true, None);
-    let open_config = MenuItem::new("Edit settings (config.toml)", true, None);
     let reload = MenuItem::new("Reload settings", true, None);
     let start_capture = MenuItem::new("Start capture (debug)", true, None);
     let stop_capture = MenuItem::new("Stop capture (debug)", true, None);
     let quit = MenuItem::new("Quit", true, None);
 
+    menu.append(&settings)?;
     menu.append(&open_clips)?;
-    menu.append(&open_config)?;
     menu.append(&reload)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&start_capture)?;
@@ -107,14 +113,13 @@ fn build_tray(config: &Config) -> Result<Tray> {
 
     Ok(Tray {
         _icon: tray_icon,
+        settings_id: settings.id().clone(),
         open_clips_id: open_clips.id().clone(),
-        open_config_id: open_config.id().clone(),
         reload_id: reload.id().clone(),
         start_capture_id: start_capture.id().clone(),
         stop_capture_id: stop_capture.id().clone(),
         quit_id: quit.id().clone(),
         output_dir: config.output_dir.clone(),
-        config_path: config::config_path().unwrap_or_default(),
     })
 }
 
@@ -143,20 +148,23 @@ fn make_tray_icon() -> tray_icon::Icon {
 }
 
 fn run_message_loop(
-    router: &HotkeyRouter,
+    router: &mut Option<HotkeyRouter>,
     engine_tx: &std::sync::mpsc::Sender<EngineCommand>,
     tray: &Tray,
 ) -> Result<()> {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, GetMessageW, TranslateMessage, MSG,
     };
 
     let hotkey_rx = GlobalHotKeyEvent::receiver();
     let menu_rx = MenuEvent::receiver();
+    // Thread id so the settings-GUI waiter thread can wake us to reload.
+    let main_tid = unsafe { GetCurrentThreadId() };
 
     let mut msg = MSG::default();
     loop {
-        // Block until the next window message (hotkey/tray/menu all post here).
+        // Block until the next window/thread message.
         let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
         if got.0 == 0 {
             break; // WM_QUIT
@@ -164,15 +172,20 @@ fn run_message_loop(
         if got.0 == -1 {
             anyhow::bail!("GetMessageW failed");
         }
-        unsafe {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        if msg.message == WM_RELOAD {
+            // Settings GUI closed — reload config and re-register hotkeys live.
+            reload_config_and_hotkeys(router, engine_tx);
+        } else {
+            unsafe {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
 
         // Drain any clip hotkeys.
         while let Ok(ev) = hotkey_rx.try_recv() {
             if ev.state == HotKeyState::Pressed {
-                if let Some((seconds, name)) = router.resolve(ev.id) {
+                if let Some((seconds, name)) = router.as_ref().and_then(|r| r.resolve(ev.id)) {
                     log::info!("hotkey: save last {seconds}s ('{name}')");
                     let _ = engine_tx.send(EngineCommand::SaveClip {
                         seconds,
@@ -184,7 +197,9 @@ fn run_message_loop(
 
         // Drain any tray menu clicks.
         while let Ok(ev) = menu_rx.try_recv() {
-            if ev.id == tray.open_clips_id {
+            if ev.id == tray.settings_id {
+                launch_settings_gui(main_tid);
+            } else if ev.id == tray.open_clips_id {
                 // Ensure the clips folder actually exists before opening it,
                 // so it always resolves to a real folder under Videos.
                 if let Err(e) = std::fs::create_dir_all(&tray.output_dir) {
@@ -194,22 +209,8 @@ fn run_message_loop(
                     );
                 }
                 open_folder(&tray.output_dir);
-            } else if ev.id == tray.open_config_id {
-                // Make sure config.toml exists, then open it for editing.
-                if let Err(e) = config::Config::load_or_create() {
-                    log::warn!("could not ensure config exists: {e}");
-                }
-                open_file_in_editor(&tray.config_path);
             } else if ev.id == tray.reload_id {
-                match Config::load_or_create() {
-                    Ok(cfg) => {
-                        log::info!("reloading settings");
-                        let _ = engine_tx.send(EngineCommand::ReloadConfig(Box::new(cfg)));
-                        // NOTE: hotkey changes take effect on next launch until
-                        // layer 5 adds live re-registration.
-                    }
-                    Err(e) => log::warn!("reload failed: {e}"),
-                }
+                reload_config_and_hotkeys(router, engine_tx);
             } else if ev.id == tray.start_capture_id {
                 log::info!("debug: start capture");
                 let _ = engine_tx.send(EngineCommand::StartCapture {
@@ -228,18 +229,59 @@ fn run_message_loop(
     Ok(())
 }
 
+/// Reload config from disk, re-register hotkeys (old ones dropped first so the
+/// same keys don't collide), and push the new config to the engine.
+fn reload_config_and_hotkeys(
+    router: &mut Option<HotkeyRouter>,
+    engine_tx: &std::sync::mpsc::Sender<EngineCommand>,
+) {
+    log::info!("reloading settings");
+    // Drop old registrations first, freeing the key combos.
+    *router = None;
+    match Config::load_or_create() {
+        Ok(cfg) => {
+            std::fs::create_dir_all(&cfg.output_dir).ok();
+            match HotkeyRouter::register(&cfg) {
+                Ok(r) => *router = Some(r),
+                Err(e) => log::error!("re-registering hotkeys failed: {e}"),
+            }
+            let _ = engine_tx.send(EngineCommand::ReloadConfig(Box::new(cfg)));
+        }
+        Err(e) => log::warn!("reload failed: {e}"),
+    }
+}
+
+/// Launch the settings GUI as a separate process, and when it closes, wake the
+/// message loop (via a thread message) to reload config + hotkeys.
+fn launch_settings_gui(main_tid: u32) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            log::warn!("cannot locate own exe for settings GUI: {e}");
+            return;
+        }
+    };
+    match std::process::Command::new(exe).arg("--gui").spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+                unsafe {
+                    let _ = PostThreadMessageW(main_tid, WM_RELOAD, WPARAM(0), LPARAM(0));
+                }
+            });
+        }
+        Err(e) => log::warn!("could not launch settings GUI: {e}"),
+    }
+}
+
 /// Open a folder in Explorer. Pass an absolute path — Explorer does NOT
 /// expand environment variables like `%APPDATA%` from the command line.
 fn open_folder(path: &std::path::Path) {
     // `explorer` returns nonzero even on success for folders; ignore status.
     let _ = std::process::Command::new("explorer").arg(path).spawn();
-}
-
-/// Open a file for editing in Notepad. Reliable for a `.toml` regardless of
-/// file associations (avoids the "how do you want to open this?" prompt), and
-/// takes an absolute path so there's no env-var expansion to go wrong.
-fn open_file_in_editor(path: &std::path::Path) {
-    let _ = std::process::Command::new("notepad").arg(path).spawn();
 }
 
 #[cfg(windows)]

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LowResourceCapture — Settings</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #1e2128; --panel2: #262a33; --border: #333846;
+    --text: #e6e8ec; --muted: #9aa0ac; --accent: #e02b2b; --accent2: #ff5a5a;
+    --ok: #2ecc71; --field: #12141a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    padding: 16px 20px 10px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  main { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .section-title {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin: 18px 0 8px;
+  }
+  .preset {
+    display: grid; grid-template-columns: 1.3fr 1fr 1.2fr auto;
+    gap: 8px; align-items: center;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px; margin-bottom: 8px;
+  }
+  .preset .lbl { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  input, select, button {
+    font: inherit; color: var(--text);
+    background: var(--field); border: 1px solid var(--border);
+    border-radius: 7px; padding: 7px 9px; width: 100%;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent2); }
+  .dur-row { display: flex; gap: 6px; }
+  .dur-row input { width: 72px; }
+  .hotkey-btn { cursor: pointer; text-align: center; white-space: nowrap;
+    background: var(--panel2); font-variant: small-caps; }
+  .hotkey-btn.capturing { border-color: var(--accent2); color: var(--accent2); }
+  .icon-btn {
+    width: 34px; height: 34px; padding: 0; cursor: pointer; color: var(--muted);
+    background: transparent; border: 1px solid var(--border); border-radius: 7px;
+  }
+  .icon-btn:hover { color: var(--accent2); border-color: var(--accent2); }
+  .add-btn {
+    cursor: pointer; background: transparent; border: 1px dashed var(--border);
+    color: var(--muted); padding: 9px; border-radius: 8px;
+  }
+  .add-btn:hover { color: var(--text); border-color: var(--accent2); }
+  .adv { background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .field { margin-bottom: 10px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  footer {
+    display: flex; justify-content: flex-end; gap: 10px;
+    padding: 12px 20px; border-top: 1px solid var(--border); background: var(--panel);
+  }
+  .btn-primary { width: auto; cursor: pointer; background: var(--accent);
+    border-color: var(--accent); font-weight: 600; padding: 9px 20px; }
+  .btn-primary:hover { background: var(--accent2); }
+  .btn-ghost { width: auto; cursor: pointer; background: transparent; padding: 9px 16px; }
+  .btn-ghost:hover { border-color: var(--muted); }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px;
+    text-transform: uppercase; letter-spacing: .06em; margin: 18px 0 8px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Clip Settings</h1>
+    <p>One hotkey per clip length. Click a hotkey, then press the key(s) you want.</p>
+  </header>
+
+  <main>
+    <div class="section-title">Clip presets</div>
+    <div id="presets"></div>
+    <button class="add-btn" id="addBtn">+ Add preset</button>
+
+    <details>
+      <summary>Advanced</summary>
+      <div class="adv">
+        <div class="field">
+          <label>Clips output folder</label>
+          <input type="text" id="outputDir" spellcheck="false">
+          <div class="hint">Saved clips go here. Your saved videos are never removed on uninstall.</div>
+        </div>
+        <div class="grid2">
+          <div class="field">
+            <label>Codec</label>
+            <select id="codec">
+              <option value="hevc">HEVC (H.265) — smaller, best quality</option>
+              <option value="h264">H.264 — max compatibility</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Bitrate (Mbps)</label>
+            <input type="number" id="bitrate" min="5" max="200" step="5">
+          </div>
+          <div class="field">
+            <label>Framerate (fps)</label>
+            <input type="number" id="fps" min="30" max="240" step="10">
+          </div>
+          <div class="field">
+            <label>Max buffer (seconds)</label>
+            <input type="number" id="bufSecs" min="15" step="15">
+          </div>
+          <div class="field">
+            <label>Max buffer RAM (MB)</label>
+            <input type="number" id="bufRam" min="128" step="128">
+          </div>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <footer>
+    <button class="btn-ghost" id="cancelBtn">Cancel</button>
+    <button class="btn-primary" id="saveBtn">Save</button>
+  </footer>
+
+<script>
+  const cfg = window.__CONFIG__ || {};
+  const presetsEl = document.getElementById('presets');
+  let maxBuf = (cfg.buffer && cfg.buffer.max_seconds) ? cfg.buffer.max_seconds : 120;
+  const durMax = Math.max(maxBuf, 120);
+
+  function durationOptions(selected) {
+    let opts = '<option value="">Preset…</option>';
+    for (let s = 15; s <= durMax; s += 15) {
+      opts += `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}s</option>`;
+    }
+    return opts;
+  }
+
+  function makePreset(p) {
+    p = p || { name: 'New', seconds: 30, hotkey: '' };
+    const row = document.createElement('div');
+    row.className = 'preset';
+    row.innerHTML = `
+      <div>
+        <div class="lbl">Name</div>
+        <input class="p-name" type="text" value="${escapeAttr(p.name)}">
+      </div>
+      <div>
+        <div class="lbl">Duration</div>
+        <div class="dur-row">
+          <input class="p-secs" type="number" min="1" value="${p.seconds}">
+          <select class="p-dur">${durationOptions(p.seconds)}</select>
+        </div>
+      </div>
+      <div>
+        <div class="lbl">Hotkey</div>
+        <button class="hotkey-btn p-hotkey" data-hk="${escapeAttr(p.hotkey)}">${p.hotkey ? formatHk(p.hotkey) : 'Click to set'}</button>
+      </div>
+      <button class="icon-btn p-remove" title="Remove">✕</button>
+    `;
+    // duration dropdown -> number
+    row.querySelector('.p-dur').addEventListener('change', e => {
+      if (e.target.value) row.querySelector('.p-secs').value = e.target.value;
+    });
+    // remove
+    row.querySelector('.p-remove').addEventListener('click', () => row.remove());
+    // hotkey capture
+    row.querySelector('.p-hotkey').addEventListener('click', ev => captureHotkey(ev.target));
+    presetsEl.appendChild(row);
+  }
+
+  function captureHotkey(btn) {
+    btn.classList.add('capturing');
+    btn.textContent = 'Press keys…  (Esc cancels)';
+    const onKey = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === 'Escape') { finish(btn.dataset.hk); return; }
+      const mods = [];
+      if (e.ctrlKey) mods.push('Control');
+      if (e.shiftKey) mods.push('Shift');
+      if (e.altKey) mods.push('Alt');
+      if (e.metaKey) mods.push('Super');
+      const code = e.code;
+      const isModOnly = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/.test(code);
+      if (isModOnly) {
+        btn.textContent = (mods.join('+') || '…') + '+…';
+        return; // wait for a real key
+      }
+      const combo = [...mods, code].join('+');
+      finish(combo);
+    };
+    const finish = (hk) => {
+      window.removeEventListener('keydown', onKey, true);
+      btn.classList.remove('capturing');
+      btn.dataset.hk = hk || '';
+      btn.textContent = hk ? formatHk(hk) : 'Click to set';
+    };
+    window.addEventListener('keydown', onKey, true);
+  }
+
+  // Pretty label: Control+Shift+F9 -> Ctrl + Shift + F9 ; KeyA -> A ; Digit1 -> 1
+  function formatHk(hk) {
+    return hk.split('+').map(part => {
+      if (part === 'Control') return 'Ctrl';
+      if (part === 'Super') return 'Win';
+      if (part.startsWith('Key')) return part.slice(3);
+      if (part.startsWith('Digit')) return part.slice(5);
+      return part;
+    }).join(' + ');
+  }
+
+  function escapeAttr(s) { return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+  // Populate
+  (cfg.presets && cfg.presets.length ? cfg.presets : [
+    { name: 'Short', seconds: 15, hotkey: 'F9' },
+    { name: 'Medium', seconds: 30, hotkey: 'F10' },
+    { name: 'Long', seconds: 60, hotkey: 'F11' },
+  ]).forEach(makePreset);
+
+  document.getElementById('outputDir').value = cfg.output_dir || '';
+  document.getElementById('codec').value = (cfg.encoder && cfg.encoder.codec) || 'hevc';
+  document.getElementById('bitrate').value = (cfg.encoder && cfg.encoder.bitrate_mbps) || 40;
+  document.getElementById('fps').value = (cfg.encoder && cfg.encoder.fps) || 60;
+  document.getElementById('bufSecs').value = maxBuf;
+  document.getElementById('bufRam').value = (cfg.buffer && cfg.buffer.max_ram_mb) || 1024;
+
+  document.getElementById('addBtn').addEventListener('click', () => makePreset());
+  document.getElementById('cancelBtn').addEventListener('click', () => send({ cmd: 'cancel' }));
+  document.getElementById('saveBtn').addEventListener('click', () => {
+    const presets = [...document.querySelectorAll('.preset')].map(row => ({
+      name: row.querySelector('.p-name').value.trim() || 'Clip',
+      seconds: Math.max(1, parseInt(row.querySelector('.p-secs').value) || 30),
+      hotkey: row.querySelector('.p-hotkey').dataset.hk || '',
+    })).filter(p => p.hotkey);
+    send({
+      cmd: 'save',
+      presets,
+      output_dir: document.getElementById('outputDir').value.trim(),
+      codec: document.getElementById('codec').value,
+      bitrate_mbps: parseInt(document.getElementById('bitrate').value) || 40,
+      fps: parseInt(document.getElementById('fps').value) || 60,
+      buffer_max_seconds: parseInt(document.getElementById('bufSecs').value) || 120,
+      buffer_max_ram_mb: parseInt(document.getElementById('bufRam').value) || 1024,
+    });
+  });
+
+  function send(obj) {
+    if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(JSON.stringify(obj));
+  }
+</script>
+</body>
+</html>
