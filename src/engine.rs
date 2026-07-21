@@ -171,10 +171,31 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     let dir = config.output_dir.join(&source);
                     std::fs::create_dir_all(&dir).ok();
                     let path = muxer::clip_filename(&dir, seconds);
-                    match muxer::write_clip(&path, vtype, &frames) {
+
+                    // Gather the matching game + mic audio for the same window.
+                    // Their media types come from the running AudioCapture; the
+                    // frames share the QPC clock with the video (see muxer).
+                    let game_frames = audio_ring.lock().unwrap().extract_last(seconds);
+                    let mic_frames = mic_ring.lock().unwrap().extract_last(seconds);
+                    let game_type = audio.as_ref().and_then(|a| a.game_type());
+                    let mic_type = audio.as_ref().and_then(|a| a.mic_type());
+                    let mut tracks: Vec<muxer::AudioTrack> = Vec::new();
+                    if let Some(t) = game_type.as_ref() {
+                        if !game_frames.is_empty() {
+                            tracks.push(muxer::AudioTrack { media_type: t, frames: &game_frames });
+                        }
+                    }
+                    if let Some(t) = mic_type.as_ref() {
+                        if !mic_frames.is_empty() {
+                            tracks.push(muxer::AudioTrack { media_type: t, frames: &mic_frames });
+                        }
+                    }
+
+                    match muxer::write_clip(&path, vtype, &frames, &tracks) {
                         Ok(()) => log::info!(
-                            "saved '{label}' clip: {seconds}s, {} frames -> {}",
+                            "saved '{label}' clip: {seconds}s, {} video frames + {} audio track(s) -> {}",
                             frames.len(),
+                            tracks.len(),
                             path.display()
                         ),
                         Err(e) => log::error!("failed to save clip: {e:#}"),

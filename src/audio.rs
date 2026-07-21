@@ -42,10 +42,23 @@ const MF_VERSION: u32 = (0x0002 << 16) | 0x0070;
 const MFSTARTUP_FULL: u32 = 0;
 const HNS_PER_SEC: i64 = 10_000_000;
 
-/// Which encoded audio tracks a saved clip should carry (used from L4).
-pub struct AudioTracks {
-    pub game: Vec<EncodedFrame>,
-    pub mic: Vec<EncodedFrame>,
+/// The AAC output media type of a capture worker, shared back to the muxer so
+/// it can add the audio stream. MF interfaces aren't `Send` in windows-rs, but
+/// a media type is a free-threaded MF attribute store used only across our MTA
+/// threads, so sharing it is sound.
+#[derive(Clone, Default)]
+pub struct SharedAudioType(Arc<Mutex<Option<IMFMediaType>>>);
+unsafe impl Send for SharedAudioType {}
+unsafe impl Sync for SharedAudioType {}
+
+impl SharedAudioType {
+    fn set(&self, t: IMFMediaType) {
+        *self.0.lock().unwrap() = Some(t);
+    }
+    /// The AAC media type, once the worker's encoder is configured.
+    pub fn get(&self) -> Option<IMFMediaType> {
+        self.0.lock().unwrap().clone()
+    }
 }
 
 struct Worker {
@@ -57,6 +70,10 @@ struct Worker {
 /// capture threads.
 pub struct AudioCapture {
     workers: Vec<Worker>,
+    /// AAC media type for the game/desktop track (set once capturing).
+    game_type: SharedAudioType,
+    /// AAC media type for the mic track (unset when the mic is off).
+    mic_type: SharedAudioType,
 }
 
 impl AudioCapture {
@@ -68,28 +85,52 @@ impl AudioCapture {
         game_ring: Arc<Mutex<RingBuffer>>,
         mic_ring: Arc<Mutex<RingBuffer>>,
     ) -> Result<AudioCapture> {
+        let game_type = SharedAudioType::default();
+        let mic_type = SharedAudioType::default();
         let mut workers = Vec::new();
         if matches!(mode, AudioMode::None) {
-            return Ok(AudioCapture { workers });
+            return Ok(AudioCapture {
+                workers,
+                game_type,
+                mic_type,
+            });
         }
         // Game/desktop audio via render-endpoint loopback.
-        workers.push(spawn_worker("audio-game", game_ring, eRender, true));
+        workers.push(spawn_worker(
+            "audio-game",
+            game_ring,
+            eRender,
+            true,
+            game_type.clone(),
+        ));
         // Microphone (no loopback) when the mode wants it.
         if matches!(
             mode,
             AudioMode::GameAndMicSeparate | AudioMode::GameAndMicMixed
         ) {
-            workers.push(spawn_worker("audio-mic", mic_ring, eCapture, false));
+            workers.push(spawn_worker(
+                "audio-mic",
+                mic_ring,
+                eCapture,
+                false,
+                mic_type.clone(),
+            ));
         }
-        Ok(AudioCapture { workers })
+        Ok(AudioCapture {
+            workers,
+            game_type,
+            mic_type,
+        })
     }
 
-    /// L4 will return the buffered audio to pair with a saved clip.
-    pub fn extract_last(&self, _seconds: u32) -> AudioTracks {
-        AudioTracks {
-            game: Vec::new(),
-            mic: Vec::new(),
-        }
+    /// AAC media type for the game/desktop track (once capturing has begun).
+    pub fn game_type(&self) -> Option<IMFMediaType> {
+        self.game_type.get()
+    }
+
+    /// AAC media type for the mic track (None when the mic is off).
+    pub fn mic_type(&self) -> Option<IMFMediaType> {
+        self.mic_type.get()
     }
 }
 
@@ -111,13 +152,14 @@ fn spawn_worker(
     ring: Arc<Mutex<RingBuffer>>,
     dataflow: EDataFlow,
     loopback: bool,
+    out_type: SharedAudioType,
 ) -> Worker {
     let shutdown = Arc::new(AtomicBool::new(false));
     let sd = shutdown.clone();
     let thread = std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
-            if let Err(e) = capture_loop(&sd, &ring, dataflow, loopback) {
+            if let Err(e) = capture_loop(&sd, &ring, dataflow, loopback, &out_type) {
                 log::error!("audio capture failed: {e:#}");
             }
         })
@@ -135,6 +177,7 @@ fn capture_loop(
     ring: &Arc<Mutex<RingBuffer>>,
     dataflow: EDataFlow,
     loopback: bool,
+    out_type: &SharedAudioType,
 ) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -178,6 +221,11 @@ fn capture_loop(
         let capture: IAudioCaptureClient = client.GetService().context("GetService capture")?;
 
         let encoder = create_aac_encoder(rate, channels).context("create AAC encoder")?;
+        // Publish the AAC output media type so the muxer can add this audio
+        // stream to saved clips (L4b).
+        if let Ok(ot) = encoder.GetOutputCurrentType(0) {
+            out_type.set(ot);
+        }
 
         client.Start().context("IAudioClient::Start")?;
         log::info!(
@@ -202,8 +250,12 @@ fn capture_loop(
                 let mut pdata: *mut u8 = std::ptr::null_mut();
                 let mut nframes: u32 = 0;
                 let mut flags: u32 = 0;
+                // Request the QPC position of this packet: it's in 100ns units
+                // on the same clock as WGC's SystemRelativeTime (video), so
+                // audio and video line up at mux time.
+                let mut qpc: u64 = 0;
                 if capture
-                    .GetBuffer(&mut pdata, &mut nframes, &mut flags, None, None)
+                    .GetBuffer(&mut pdata, &mut nframes, &mut flags, None, Some(&mut qpc))
                     .is_err()
                     || nframes == 0
                 {
@@ -213,7 +265,13 @@ fn capture_loop(
 
                 let pcm = to_i16_pcm(pdata, nframes, src_channels, src_bits, channels);
                 once!(lg_pcm, "{tag}: first PCM converted ({} bytes)", pcm.len());
-                let pts = total_frames * HNS_PER_SEC / rate as i64;
+                // QPC-based pts (shared clock with video); fall back to sample
+                // counting only if the device didn't provide a QPC position.
+                let pts = if qpc != 0 {
+                    qpc as i64
+                } else {
+                    total_frames * HNS_PER_SEC / rate as i64
+                };
                 let dur = nframes as i64 * HNS_PER_SEC / rate as i64;
                 total_frames += nframes as i64;
 
