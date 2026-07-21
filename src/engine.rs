@@ -15,8 +15,11 @@
 //! capture/encode feed and muxer calls are stubbed (they log) until layers 2+
 //! wire in the Windows GPU pipeline. `UNVERIFIED` end-to-end until then.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use windows::Win32::Media::MediaFoundation::IMFMediaType;
 
@@ -24,7 +27,69 @@ use crate::audio::AudioCapture;
 use crate::capture::{CaptureTarget, MonitorCapture};
 use crate::config::{Codec, Config};
 use crate::muxer;
-use crate::ringbuffer::RingBuffer;
+use crate::ringbuffer::{EncodedFrame, RingBuffer};
+
+/// A Media Foundation media type moved to the writer thread. `IMFMediaType`
+/// isn't `Send` in windows-rs, but it's a free-threaded MF attribute store and
+/// both the engine and writer threads are MTA, so this is sound.
+struct SendType(IMFMediaType);
+unsafe impl Send for SendType {}
+
+/// A fully-extracted clip handed to the background writer thread, so a slow mux
+/// never blocks the engine command loop or capture. Everything here is owned
+/// and `Send`.
+struct WriteJob {
+    path: std::path::PathBuf,
+    label: String,
+    seconds: u32,
+    video_type: SendType,
+    video: Vec<EncodedFrame>,
+    audio: Vec<(SendType, Vec<EncodedFrame>)>,
+}
+
+/// Spawn the background clip-writer thread. Returns a sender for jobs and a
+/// counter of writes in flight (so the engine can bound the backlog).
+fn spawn_clip_writer() -> (Sender<WriteJob>, Arc<AtomicUsize>) {
+    let (tx, rx) = std::sync::mpsc::channel::<WriteJob>();
+    let pending = Arc::new(AtomicUsize::new(0));
+    let p = pending.clone();
+    std::thread::Builder::new()
+        .name("clip-writer".into())
+        .spawn(move || {
+            // Muxing uses Media Foundation on this thread; join the MTA.
+            unsafe {
+                let _ = windows::Win32::System::WinRT::RoInitialize(
+                    windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
+                );
+            }
+            while let Ok(job) = rx.recv() {
+                let tracks: Vec<muxer::AudioTrack> = job
+                    .audio
+                    .iter()
+                    .map(|(t, f)| muxer::AudioTrack {
+                        media_type: &t.0,
+                        frames: f,
+                    })
+                    .collect();
+                let t0 = std::time::Instant::now();
+                match muxer::write_clip(&job.path, &job.video_type.0, &job.video, &tracks) {
+                    Ok(()) => log::info!(
+                        "saved '{}' clip: {}s, {} video frames + {} audio track(s) in {} ms -> {}",
+                        job.label,
+                        job.seconds,
+                        job.video.len(),
+                        tracks.len(),
+                        t0.elapsed().as_millis(),
+                        job.path.display()
+                    ),
+                    Err(e) => log::error!("failed to save '{}' clip: {e:#}", job.label),
+                }
+                p.fetch_sub(1, Ordering::Relaxed);
+            }
+        })
+        .expect("spawn clip writer thread");
+    (tx, pending)
+}
 
 /// Commands sent to the engine thread.
 pub enum EngineCommand {
@@ -108,6 +173,9 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
     // Samples the foreground app once a second so a saved clip is filed under
     // wherever it spent the most time (see SaveClip).
     let fg_tracker = crate::game_detect::ForegroundTracker::start(config.buffer.max_seconds);
+    // Clips are muxed on their own thread so a slow/large save never blocks the
+    // command loop or capture (that stall was making long clips never finish).
+    let (clip_tx, clip_pending) = spawn_clip_writer();
     let mut capture: Option<MonitorCapture> = None;
     let mut audio: Option<AudioCapture> = None;
     // The video encoder's output media type, needed to mux. Set when capture
@@ -167,44 +235,53 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     );
                     // TODO(layer 5): toast "Nothing to clip yet".
                 } else if let Some(vtype) = video_out_type.as_ref() {
-                    // File the clip under a per-source subfolder named for the
-                    // app the clip spent the most time in (ties -> the app at the
-                    // clip's start); fall back to the live foreground app if there
-                    // is no history yet. <output_dir>\<source>\clip_...mp4.
-                    let source = fg_tracker
-                        .majority_folder(std::time::Duration::from_secs(seconds as u64))
-                        .unwrap_or_else(crate::game_detect::foreground_app_folder);
-                    let dir = config.output_dir.join(&source);
-                    std::fs::create_dir_all(&dir).ok();
-                    let path = muxer::clip_filename(&dir, seconds);
+                    // Bound the backlog so mashing the hotkey can't pile up RAM
+                    // (each job owns a full copy of the clip's frames).
+                    const MAX_PENDING: usize = 4;
+                    if clip_pending.load(Ordering::Relaxed) >= MAX_PENDING {
+                        log::warn!("clip '{label}' skipped: {MAX_PENDING} writes already queued");
+                    } else {
+                        // Decide the folder now, at press time, by where the clip
+                        // spent the most time (ties -> the app at the clip's start),
+                        // falling back to the live foreground app.
+                        let source = fg_tracker
+                            .majority_folder(Duration::from_secs(seconds as u64))
+                            .unwrap_or_else(crate::game_detect::foreground_app_folder);
+                        let dir = config.output_dir.join(&source);
+                        std::fs::create_dir_all(&dir).ok();
+                        let path = muxer::clip_filename(&dir, seconds);
 
-                    // Gather the matching game + mic audio for the same window.
-                    // Their media types come from the running AudioCapture; the
-                    // frames share the QPC clock with the video (see muxer).
-                    let game_frames = audio_ring.lock().unwrap().extract_last(seconds);
-                    let mic_frames = mic_ring.lock().unwrap().extract_last(seconds);
-                    let game_type = audio.as_ref().and_then(|a| a.game_type());
-                    let mic_type = audio.as_ref().and_then(|a| a.mic_type());
-                    let mut tracks: Vec<muxer::AudioTrack> = Vec::new();
-                    if let Some(t) = game_type.as_ref() {
-                        if !game_frames.is_empty() {
-                            tracks.push(muxer::AudioTrack { media_type: t, frames: &game_frames });
+                        // Gather the matching game + mic audio (QPC-aligned with
+                        // the video; see muxer) and their AAC media types.
+                        let game_frames = audio_ring.lock().unwrap().extract_last(seconds);
+                        let mic_frames = mic_ring.lock().unwrap().extract_last(seconds);
+                        let mut audio_tracks: Vec<(SendType, Vec<EncodedFrame>)> = Vec::new();
+                        if let Some(t) = audio.as_ref().and_then(|a| a.game_type()) {
+                            if !game_frames.is_empty() {
+                                audio_tracks.push((SendType(t), game_frames));
+                            }
                         }
-                    }
-                    if let Some(t) = mic_type.as_ref() {
-                        if !mic_frames.is_empty() {
-                            tracks.push(muxer::AudioTrack { media_type: t, frames: &mic_frames });
+                        if let Some(t) = audio.as_ref().and_then(|a| a.mic_type()) {
+                            if !mic_frames.is_empty() {
+                                audio_tracks.push((SendType(t), mic_frames));
+                            }
                         }
-                    }
 
-                    match muxer::write_clip(&path, vtype, &frames, &tracks) {
-                        Ok(()) => log::info!(
-                            "saved '{label}' clip: {seconds}s, {} video frames + {} audio track(s) -> {}",
-                            frames.len(),
-                            tracks.len(),
-                            path.display()
-                        ),
-                        Err(e) => log::error!("failed to save clip: {e:#}"),
+                        clip_pending.fetch_add(1, Ordering::Relaxed);
+                        let job = WriteJob {
+                            path,
+                            label: label.clone(),
+                            seconds,
+                            video_type: SendType(vtype.clone()),
+                            video: frames,
+                            audio: audio_tracks,
+                        };
+                        if clip_tx.send(job).is_err() {
+                            clip_pending.fetch_sub(1, Ordering::Relaxed);
+                            log::error!("clip writer thread is gone; cannot save '{label}'");
+                        } else {
+                            log::info!("queued '{label}' clip ({seconds}s) for writing");
+                        }
                     }
                 } else {
                     log::warn!("clip '{label}': no encoder output type yet (start capture first)");
@@ -212,10 +289,10 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
             }
             EngineCommand::ReloadConfig(new_cfg) => {
                 log::info!("engine reloading config");
+                // Keep the ring buffers as-is so changing settings doesn't wipe
+                // the last N seconds you could still want to clip. (Buffer-size
+                // changes take effect on next launch.)
                 config = *new_cfg;
-                // Rebuild the ring contents in place (shared Arc stays valid).
-                *ring.lock().unwrap() =
-                    RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
             }
             EngineCommand::DumpBuffer => {
                 let frames = ring.lock().unwrap().extract_last(u32::MAX / 2);

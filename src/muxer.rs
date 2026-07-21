@@ -12,6 +12,7 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use windows::core::HSTRING;
 use windows::Win32::Media::MediaFoundation::{
@@ -60,6 +61,7 @@ pub fn write_clip(
         anyhow::bail!("no video frames to write");
     }
     unsafe {
+        let t0 = Instant::now();
         let url = HSTRING::from(out_path.to_string_lossy().as_ref());
         let writer: IMFSinkWriter =
             MFCreateSinkWriterFromURL(&url, None, None).context("MFCreateSinkWriterFromURL")?;
@@ -82,6 +84,7 @@ pub fn write_clip(
         }
 
         writer.BeginWriting().context("BeginWriting")?;
+        let t_setup = t0.elapsed();
 
         // Rebase all streams by the video start; collect (pts, stream, frame)
         // and write in global timestamp order.
@@ -101,13 +104,25 @@ pub fn write_clip(
         }
         items.sort_by_key(|(pts, _, _)| *pts);
 
+        let t_write = Instant::now();
+        let n_samples = items.len();
         for (pts, stream, f) in items {
             let sample = build_sample(&f.data, pts, f.dur_100ns, f.keyframe)?;
             writer
                 .WriteSample(stream, &sample)
                 .context("WriteSample")?;
         }
+        let write_ms = t_write.elapsed();
+
+        let t_final = Instant::now();
         writer.Finalize().context("Finalize")?;
+        log::info!(
+            "write_clip phases: setup {} ms, write {} samples {} ms, finalize {} ms",
+            t_setup.as_millis(),
+            n_samples,
+            write_ms.as_millis(),
+            t_final.elapsed().as_millis()
+        );
     }
     Ok(())
 }
