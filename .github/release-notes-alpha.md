@@ -1,33 +1,37 @@
-## LowResourceCapture — alpha (capture + NVENC encode works!)
+## LowResourceCapture — alpha: it SAVES CLIPS now! 🎬
 
-**The core recorder now works end to end in RAM.** Screen capture → GPU NV12
-conversion → **NVENC hardware encode** → encoded footage living in the ring
-buffer. Saving to `.mp4` (Layer 4) and audio (Layer 3) are still to come, so
-this is a **validation build**, not a finished clipper yet.
+**Pressing a clip hotkey now saves a real `.mp4` of the last N seconds.** The
+core "instant replay" recorder works end to end: continuous GPU capture →
+NVENC encode → in-RAM ring buffer → hit a hotkey → muxed to `.mp4` (no
+re-encode, near-instant).
 
-### Try the capture pipeline (debug)
-1. Install and let it sit in the tray.
-2. Right-click the tray icon → **Start capture (debug)** (captures your
-   primary monitor).
-3. Wait ~5 seconds.
-4. Right-click → **Dump raw buffer (debug)**.
-5. Open your clips folder (default `D:\Videos\LowResourceCapture`) and play the
-   `debug_*.hevc` (or `.h264`) file in **VLC**. If you see your screen — the
-   whole capture→encode pipeline works on your GPU. 🎉
-6. The log at `%APPDATA%\LowResourceCapture\lowresourcecapture.log` shows
-   **`encoder ready: HEVC`** vs **`H.264`** (which your GPU gave), plus
-   per-second `encode: N frames` stats and buffer size.
+> **Video only for now** — game + mic audio muxing lands in the very next
+> build. Capture is still started from the tray (auto game-detect is L5).
+
+### Try it
+1. Install (SmartScreen → **More info → Run anyway** — unsigned).
+2. Tray → **Start capture (debug)** (captures your primary monitor).
+3. Wait ~5 seconds (or play a game / move windows around).
+4. Press a clip hotkey: **F9** = 15s, **F10** = 30s, **F11** = 60s
+   (all editable in tray → **Settings…**).
+5. Open your clips folder (default `D:\Videos\LowResourceCapture`) and **play
+   `clip_<date-time>_<len>s.mp4`**. If it plays back your last N seconds — the
+   whole pipeline works on your GPU. 🎉
+
+The log (`%APPDATA%\LowResourceCapture\lowresourcecapture.log`) shows
+`saved ... clip -> <path>`, whether the encoder used **HEVC** or **H.264**,
+and live encode stats.
 
 ### Also in this build
-- **Settings GUI** (tray → Settings…): edit clip presets (name, duration,
-  click-to-capture hotkey) + codec/bitrate/fps/buffer; applies live on close.
-- Per-user install, clean uninstaller that keeps your saved clips.
+- Settings GUI (hotkeys, durations, codec, bitrate, buffer).
+- Per-user install; uninstaller keeps your saved clips.
+- Audio is being captured + AAC-encoded already — it just isn't muxed into the
+  `.mp4` yet (next build).
 
-### What does NOT work yet
-- **No `.mp4` clips on hotkey yet** — that's Layer 4 (mux the buffered frames
-  to mp4). No audio yet (Layer 3). Capture currently targets the whole primary
-  monitor (per-game window + fps throttle is Layer 2e).
+### Coming next
+- **Next build:** game + mic audio in the clips.
+- Then: automatic game detection (no debug menu), a "clip saved" toast,
+  run-at-startup, and a feature-rich clip editor.
 
 ### Note
-Unsigned installer — SmartScreen may warn "unknown publisher." Choose
-**More info → Run anyway**.
+Unsigned installer — SmartScreen warning is expected.
