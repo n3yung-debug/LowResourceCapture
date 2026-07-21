@@ -8,7 +8,7 @@
 //! `UNVERIFIED` until it builds/runs on Windows.
 
 use anyhow::{Context, Result};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows::core::{IInspectable, Interface, Ref};
@@ -18,7 +18,7 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
-use windows::Win32::Foundation::{HMODULE, POINT};
+use windows::Win32::Foundation::{HMODULE, HWND, POINT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
@@ -30,6 +30,7 @@ use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
 use crate::config::EncoderConfig;
 use crate::convert::Nv12Converter;
@@ -49,14 +50,28 @@ pub struct MonitorCapture {
     frames: Arc<AtomicU64>,
 }
 
+/// What to capture. L5's game-detect chooses the game window; the debug menu
+/// uses the primary monitor.
+pub enum CaptureTarget {
+    PrimaryMonitor,
+    ForegroundWindow,
+}
+
 impl MonitorCapture {
-    /// Start capturing the primary monitor: convert each frame to NV12 and
-    /// feed it to the hardware encoder, whose pump pushes encoded frames into
-    /// `ring`.
-    pub fn start(encoder_cfg: EncoderConfig, ring: Arc<Mutex<RingBuffer>>) -> Result<Self> {
+    /// Start capturing `target`: convert each frame to NV12 and feed it to the
+    /// hardware encoder, whose pump pushes encoded frames into `ring`. Frames
+    /// are throttled to the configured fps.
+    pub fn start(
+        target: CaptureTarget,
+        encoder_cfg: EncoderConfig,
+        ring: Arc<Mutex<RingBuffer>>,
+    ) -> Result<Self> {
         let (device, context) = create_d3d11_device()?;
         let winrt_device = to_winrt_device(&device)?;
-        let item = primary_monitor_item()?;
+        let item = match target {
+            CaptureTarget::PrimaryMonitor => primary_monitor_item()?,
+            CaptureTarget::ForegroundWindow => foreground_window_item()?,
+        };
         let size = item.Size().context("capture item size")?;
         let width = size.Width.max(0) as u32;
         let height = size.Height.max(0) as u32;
@@ -83,23 +98,33 @@ impl MonitorCapture {
 
         let fps = encoder_cfg.fps.max(1);
         let dur_100ns: i64 = 10_000_000 / fps as i64;
+        // Minimum spacing between kept frames (throttle to target fps). WGC can
+        // deliver up to the monitor refresh (e.g. 360 Hz); we drop the excess.
+        let min_interval: i64 = dur_100ns;
 
         let frames = Arc::new(AtomicU64::new(0));
         let frames_cb = frames.clone();
+        let last_ts = Arc::new(AtomicI64::new(i64::MIN));
+        let last_ts_cb = last_ts.clone();
 
-        // FrameArrived fires on a background MTA thread: convert to a fresh NV12
-        // texture, wrap it as an IMFSample, and submit it to the encoder pump.
+        // FrameArrived fires on a background MTA thread: throttle to fps, then
+        // convert to a fresh NV12 texture and submit it to the encoder pump.
         let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
             move |pool: Ref<Direct3D11CaptureFramePool>, _args: Ref<IInspectable>| {
                 if let Some(pool) = pool.as_ref() {
                     if let Ok(frame) = pool.TryGetNextFrame() {
-                        let n = frames_cb.fetch_add(1, Ordering::Relaxed) + 1;
-                        if let Err(e) = process_frame(&frame, &converter, &tx, dur_100ns) {
-                            if n % 120 == 1 {
-                                log::warn!("frame {n} pipeline error: {e:#}");
+                        let ts = frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0);
+                        let last = last_ts_cb.load(Ordering::Relaxed);
+                        if ts.wrapping_sub(last) >= min_interval {
+                            last_ts_cb.store(ts, Ordering::Relaxed);
+                            let n = frames_cb.fetch_add(1, Ordering::Relaxed) + 1;
+                            if let Err(e) = process_frame(&frame, &converter, &tx, ts, dur_100ns) {
+                                if n % 120 == 1 {
+                                    log::warn!("frame {n} pipeline error: {e:#}");
+                                }
+                            } else if n % 120 == 1 {
+                                log::info!("capture->encode: {n} frames ({width}x{height})");
                             }
-                        } else if n % 120 == 1 {
-                            log::info!("capture->encode: {n} frames ({width}x{height})");
                         }
                         let _ = frame.Close();
                     }
@@ -142,13 +167,13 @@ fn process_frame(
     frame: &Direct3D11CaptureFrame,
     converter: &Nv12Converter,
     tx: &std::sync::mpsc::Sender<FrameMsg>,
+    ts: i64,
     dur_100ns: i64,
 ) -> Result<()> {
     let bgra = frame_texture(frame)?;
     // Fresh NV12 texture per frame so in-flight encoder samples don't alias.
     let nv12 = converter.create_nv12_texture()?;
     converter.convert(&bgra, &nv12)?;
-    let ts = frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0);
     // The pump thread builds the IMFSample; we only send the (Send) texture.
     let _ = tx.send((nv12, ts, dur_100ns));
     Ok(())
@@ -203,5 +228,19 @@ fn primary_monitor_item() -> Result<GraphicsCaptureItem> {
         windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
             .context("GraphicsCaptureItem interop factory")?;
     let item = unsafe { interop.CreateForMonitor(hmon) }.context("CreateForMonitor")?;
+    Ok(item)
+}
+
+/// A `GraphicsCaptureItem` for the current foreground window (L5 game-detect
+/// will pass a specific game window; this default grabs whatever's focused).
+fn foreground_window_item() -> Result<GraphicsCaptureItem> {
+    let hwnd: HWND = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        anyhow::bail!("no foreground window to capture");
+    }
+    let interop: IGraphicsCaptureItemInterop =
+        windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+            .context("GraphicsCaptureItem interop factory")?;
+    let item = unsafe { interop.CreateForWindow(hwnd) }.context("CreateForWindow")?;
     Ok(item)
 }
