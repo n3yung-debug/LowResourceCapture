@@ -19,7 +19,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
 use crate::capture::MonitorCapture;
-use crate::config::Config;
+use crate::config::{Codec, Config};
 use crate::ringbuffer::RingBuffer;
 
 /// Commands sent to the engine thread.
@@ -32,6 +32,8 @@ pub enum EngineCommand {
     StopCapture,
     /// Reload settings (hotkeys are re-registered by the caller).
     ReloadConfig(Box<Config>),
+    /// Debug: dump the whole ring buffer to a raw .hevc/.h264 file for viewing.
+    DumpBuffer,
     /// Shut the engine down.
     Shutdown,
 }
@@ -144,6 +146,37 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                 // Rebuild the ring contents in place (shared Arc stays valid).
                 *ring.lock().unwrap() =
                     RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
+            }
+            EngineCommand::DumpBuffer => {
+                let frames = ring.lock().unwrap().extract_last(u32::MAX / 2);
+                if frames.is_empty() {
+                    log::warn!("dump requested but buffer is empty (start capture first)");
+                } else {
+                    let mut data = Vec::new();
+                    for f in &frames {
+                        data.extend_from_slice(&f.data);
+                    }
+                    let dir = config.output_dir.clone();
+                    std::fs::create_dir_all(&dir).ok();
+                    let stamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let ext = match config.encoder.codec {
+                        Codec::Hevc => "hevc",
+                        Codec::H264 => "h264",
+                    };
+                    let path = dir.join(format!("debug_{stamp}.{ext}"));
+                    match std::fs::write(&path, &data) {
+                        Ok(()) => log::info!(
+                            "dumped {} frames ({} KB) to {} — play in VLC",
+                            frames.len(),
+                            data.len() / 1024,
+                            path.display()
+                        ),
+                        Err(e) => log::error!("dump write failed: {e}"),
+                    }
+                }
             }
             EngineCommand::Shutdown => {
                 log::info!("engine shutting down");

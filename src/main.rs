@@ -81,6 +81,7 @@ struct Tray {
     reload_id: tray_icon::menu::MenuId,
     start_capture_id: tray_icon::menu::MenuId,
     stop_capture_id: tray_icon::menu::MenuId,
+    dump_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     output_dir: std::path::PathBuf,
 }
@@ -92,6 +93,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
     let reload = MenuItem::new("Reload settings", true, None);
     let start_capture = MenuItem::new("Start capture (debug)", true, None);
     let stop_capture = MenuItem::new("Stop capture (debug)", true, None);
+    let dump = MenuItem::new("Dump raw buffer (debug)", true, None);
     let quit = MenuItem::new("Quit", true, None);
 
     menu.append(&settings)?;
@@ -100,6 +102,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&start_capture)?;
     menu.append(&stop_capture)?;
+    menu.append(&dump)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit)?;
 
@@ -118,6 +121,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
         reload_id: reload.id().clone(),
         start_capture_id: start_capture.id().clone(),
         stop_capture_id: stop_capture.id().clone(),
+        dump_id: dump.id().clone(),
         quit_id: quit.id().clone(),
         output_dir: config.output_dir.clone(),
     })
@@ -219,6 +223,9 @@ fn run_message_loop(
             } else if ev.id == tray.stop_capture_id {
                 log::info!("debug: stop capture");
                 let _ = engine_tx.send(EngineCommand::StopCapture);
+            } else if ev.id == tray.dump_id {
+                log::info!("debug: dump raw buffer");
+                let _ = engine_tx.send(EngineCommand::DumpBuffer);
             } else if ev.id == tray.quit_id {
                 unsafe {
                     windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);

@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use windows::core::{Interface, BOOL};
+use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D};
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
@@ -217,7 +217,7 @@ impl Drop for EncoderPump {
 
 /// Wrap an NV12 GPU texture as an `IMFSample` for the encoder (zero-copy).
 pub fn make_nv12_sample(tex: &ID3D11Texture2D, pts_100ns: i64, dur_100ns: i64) -> Result<IMFSample> {
-    let buffer = unsafe { MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, tex, 0, BOOL(0)) }
+    let buffer = unsafe { MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, tex, 0, false) }
         .context("MFCreateDXGISurfaceBuffer")?;
     let sample = unsafe { MFCreateSample() }.context("MFCreateSample")?;
     unsafe {
