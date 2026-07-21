@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Media::MediaFoundation::{
     IMFActivate, IMFMediaType, IMFTransform, MFCreateMediaType, MFStartup, MFTEnumEx,
-    MFSetAttributeRatio, MFSetAttributeSize, MFMediaType_Video, MFVideoFormat_H264,
+    MFMediaType_Video, MFVideoFormat_H264,
     MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
     MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
     MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE,
@@ -29,6 +29,13 @@ use crate::config::{Codec, EncoderConfig};
 // MF_VERSION = (MF_SDK_VERSION << 16) | MF_API_VERSION = (0x2 << 16) | 0x70.
 const MF_VERSION: u32 = (0x0002 << 16) | 0x0070;
 const MFSTARTUP_FULL: u32 = 0;
+
+/// MF stores size/ratio attributes as a packed u64 (high 32 bits = width or
+/// numerator, low 32 = height or denominator). Replaces the `MFSetAttributeSize`
+/// / `MFSetAttributeRatio` inline helpers that windows-rs doesn't expose.
+fn pack(hi: u32, lo: u32) -> u64 {
+    ((hi as u64) << 32) | (lo as u64)
+}
 
 /// A configured hardware video encoder. The async pump (L2c-2) will drive this
 /// transform to produce encoded frames.
@@ -164,9 +171,9 @@ fn configure(
         out.SetGUID(&MF_MT_SUBTYPE, &subtype(codec))?;
         out.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
         out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-        MFSetAttributeSize(&out, &MF_MT_FRAME_SIZE, width, height)?;
-        MFSetAttributeRatio(&out, &MF_MT_FRAME_RATE, cfg.fps, 1)?;
-        MFSetAttributeRatio(&out, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+        out.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
+        out.SetUINT64(&MF_MT_FRAME_RATE, pack(cfg.fps, 1))?;
+        out.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
         transform.SetOutputType(0, &out, 0)?;
     }
 
@@ -176,9 +183,9 @@ fn configure(
         inp.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
         inp.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
         inp.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-        MFSetAttributeSize(&inp, &MF_MT_FRAME_SIZE, width, height)?;
-        MFSetAttributeRatio(&inp, &MF_MT_FRAME_RATE, cfg.fps, 1)?;
-        MFSetAttributeRatio(&inp, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+        inp.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
+        inp.SetUINT64(&MF_MT_FRAME_RATE, pack(cfg.fps, 1))?;
+        inp.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;
         transform.SetInputType(0, &inp, 0)?;
     }
 
