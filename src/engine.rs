@@ -18,6 +18,7 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
+use crate::audio::AudioCapture;
 use crate::capture::{CaptureTarget, MonitorCapture};
 use crate::config::{Codec, Config};
 use crate::ringbuffer::RingBuffer;
@@ -92,6 +93,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
         config.buffer.max_ram_mb,
     )));
     let mut capture: Option<MonitorCapture> = None;
+    let mut audio: Option<AudioCapture> = None;
 
     log::info!("engine started (idle)");
 
@@ -114,6 +116,9 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                         Ok(c) => capture = Some(c),
                         Err(e) => log::error!("could not start capture: {e:#}"),
                     }
+                    if audio.is_none() {
+                        audio = AudioCapture::start(config.audio).ok();
+                    }
                 }
             }
             EngineCommand::StopCapture => {
@@ -123,6 +128,8 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     // contents are kept so a clip right after alt-tab still
                     // works, then age out normally.
                 }
+                // Stop audio too (dropping it joins the capture thread).
+                audio = None;
             }
             EngineCommand::SaveClip { seconds, label } => {
                 let (frames, kb) = {
