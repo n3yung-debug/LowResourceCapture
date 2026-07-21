@@ -71,7 +71,7 @@ cargo build --release
 ```
 
 Logs are written to
-`%APPDATA%\LowResourceCapture\data\lowresourcecapture.log` (and to the console
+`%APPDATA%\LowResourceCapture\lowresourcecapture.log` (and to the console
 in debug builds).
 
 ### To start on login (later)

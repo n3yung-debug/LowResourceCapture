@@ -31,6 +31,9 @@ OutputBaseFilename=LowResourceCapture-Setup-{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; Try to close a running instance gracefully during install/uninstall.
+CloseApplications=yes
+RestartApplications=no
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 
@@ -60,3 +63,15 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
 [Run]
 ; Offer to launch right after install.
 Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; Make sure the tray app isn't running, so its exe/log aren't locked when the
+; uninstaller removes files. `& exit 0` keeps uninstall from erroring if the
+; app wasn't running.
+Filename: "{cmd}"; Parameters: "/C taskkill /IM {#MyAppExe} /F & exit 0"; Flags: runhidden; RunOnceId: "StopApp"
+
+[UninstallDelete]
+; Remove all app data (config.toml + logs) on uninstall so nothing is left
+; behind. This is under %APPDATA%\{#MyAppName} and is SEPARATE from your saved
+; clips, which live in your Videos folder and are intentionally left untouched.
+Type: filesandordirs; Name: "{userappdata}\{#MyAppName}"

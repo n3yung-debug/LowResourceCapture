@@ -14,7 +14,7 @@ distribution plumbing is solved early.
 - Global clip hotkeys (default **F9**=15s, **F10**=30s, **F11**=60s), all
   configurable in `%APPDATA%\LowResourceCapture\config.toml`.
 - Pressing a hotkey is logged to
-  `%APPDATA%\LowResourceCapture\data\lowresourcecapture.log`.
+  `%APPDATA%\LowResourceCapture\lowresourcecapture.log`.
 
 ### What does NOT work yet
 - No screen capture, no encoding, no audio, **no saved clips**. Pressing a

@@ -182,11 +182,17 @@ impl Config {
     }
 }
 
+/// `%APPDATA%\LowResourceCapture` — single base dir for config + logs.
+/// Kept flat (no nested config/ or data/ subfolders) so paths are predictable
+/// and the uninstaller can remove it wholesale.
+pub fn app_data_dir() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new().context("resolving %APPDATA%")?;
+    Ok(base.config_dir().join("LowResourceCapture"))
+}
+
 /// `%APPDATA%\LowResourceCapture\config.toml`
 pub fn config_path() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "LowResourceCapture")
-        .context("resolving config directory")?;
-    Ok(dirs.config_dir().join("config.toml"))
+    Ok(app_data_dir()?.join("config.toml"))
 }
 
 /// Default clips output directory.

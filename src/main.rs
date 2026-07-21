@@ -240,9 +240,8 @@ fn show_error_box(msg: &str) {
 
 fn init_logging() {
     // Log to a file next to the config so windowed builds still leave a trail.
-    if let Some(dirs) = directories::ProjectDirs::from("", "", "LowResourceCapture") {
-        let dir = dirs.data_dir();
-        std::fs::create_dir_all(dir).ok();
+    if let Ok(dir) = config::app_data_dir() {
+        std::fs::create_dir_all(&dir).ok();
         let log_path = dir.join("lowresourcecapture.log");
         let _ = simple_logging::log_to_file(&log_path, log::LevelFilter::Info);
     } else {
