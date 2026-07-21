@@ -35,7 +35,7 @@ pub fn init() {
             HKEY_CURRENT_USER,
             PCWSTR(subkey.as_ptr()),
             PCWSTR(name.as_ptr()),
-            REG_SZ,
+            REG_SZ.0,
             Some(disp.as_ptr() as *const _),
             (disp.len() * 2) as u32,
         )

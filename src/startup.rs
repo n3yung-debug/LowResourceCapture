@@ -44,7 +44,7 @@ pub fn set_enabled(enabled: bool) -> Result<()> {
                 HKEY_CURRENT_USER,
                 PCWSTR(subkey.as_ptr()),
                 PCWSTR(value.as_ptr()),
-                REG_SZ,
+                REG_SZ.0,
                 Some(wide.as_ptr() as *const _),
                 (wide.len() * 2) as u32,
             )
