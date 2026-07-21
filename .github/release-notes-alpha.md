@@ -1,7 +1,23 @@
-## LowResourceCapture — alpha: crash-on-capture fixed 🛠️
+## LowResourceCapture — alpha: installs to Program Files 📦
 
-**Fixes the crash when you hit "Start capture."** The previous build brought the
-HEVC encoder up correctly, then died the instant frames started flowing.
+### New: installs to `C:\Program Files (x86)\LowResourceCapture`
+The program now installs machine-wide to **`C:\Program Files (x86)\LowResourceCapture`**
+(created if it doesn't exist; an existing install is detected and reused on
+upgrade). Because that's a protected system folder, **setup now asks for admin
+(a UAC prompt)** — so on this build you'll see two prompts: the unsigned-app
+SmartScreen warning, then the UAC elevation prompt. Both are expected.
+
+> Heads-up: if you had the previous **per-user** build installed (under
+> `…\AppData\Local\Programs\LowResourceCapture`), uninstall it first from
+> *Apps & features* so you don't end up with two copies. Your saved clips and
+> settings are untouched by uninstalling.
+
+---
+
+Also in this build (from v0.1.5, in case you're jumping straight here):
+
+**Crash on "Start capture" is fixed.** An earlier build brought the HEVC encoder
+up correctly, then died the instant frames started flowing.
 
 **Cause:** the one D3D11 GPU device is shared across three threads (WGC capture,
 the BGRA→NV12 converter, and the NVENC encoder via Media Foundation's DXGI

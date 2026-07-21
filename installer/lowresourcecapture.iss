@@ -1,6 +1,7 @@
 ; Inno Setup script for LowResourceCapture.
-; Per-user install (no admin/UAC), Start Menu shortcut, optional run-at-startup,
-; clean uninstaller. Version is passed in from CI: ISCC /DMyAppVersion=x.y.z
+; Machine-wide install to Program Files (x86) (requires admin/UAC), Start Menu
+; shortcut, optional run-at-startup, clean uninstaller. Version is passed in
+; from CI: ISCC /DMyAppVersion=x.y.z
 ;
 ; Build locally with:  ISCC.exe /DMyAppVersion=0.1.0-alpha installer\lowresourcecapture.iss
 ; Output: installer\Output\LowResourceCapture-Setup-<version>.exe
@@ -19,10 +20,12 @@ AppId={{8F3A1C2E-9B4D-4E6A-A1F7-2C5D8E0B4A91}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-; Per-user install: no admin prompt, lands in the user's local Programs dir.
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
-DefaultDirName={autopf}\{#MyAppName}
+; Machine-wide install into C:\Program Files (x86)\LowResourceCapture. This is
+; a protected system location, so setup requests admin elevation (UAC). Inno
+; creates the folder if it doesn't exist; on upgrade it detects the prior
+; install (same AppId) and reuses its location.
+PrivilegesRequired=admin
+DefaultDirName={commonpf32}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#MyAppExe}
