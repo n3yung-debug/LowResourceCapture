@@ -1,0 +1,57 @@
+name: release
+
+# On a version tag (e.g. v0.1.0-alpha): build the release exe, compile the
+# Inno Setup installer, and publish a GitHub prerelease with the installer
+# attached. One tag = one downloadable installer.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release exe
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Derive version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "Version: $v"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & "$iscc" "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\lowresourcecapture.iss"
+
+      - name: Publish GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = "installer\Output\LowResourceCapture-Setup-${{ steps.ver.outputs.version }}.exe"
+          if (-not (Test-Path $installer)) { throw "installer not found: $installer" }
+          gh release create "${{ github.ref_name }}" `
+            "$installer" `
+            --title "LowResourceCapture ${{ github.ref_name }}" `
+            --notes-file ".github/release-notes-alpha.md" `
+            --prerelease
