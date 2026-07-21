@@ -18,6 +18,7 @@
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread::JoinHandle;
 
+use crate::capture::MonitorCapture;
 use crate::config::Config;
 use crate::ringbuffer::RingBuffer;
 
@@ -75,8 +76,16 @@ pub fn spawn(config: Config) -> (EngineHandle, Sender<EngineCommand>) {
 }
 
 fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
+    // Windows.Graphics.Capture is WinRT — initialize a multithreaded apartment
+    // on this thread before touching it.
+    unsafe {
+        let _ = windows::Win32::System::WinRT::RoInitialize(
+            windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
+        );
+    }
+
     let mut ring = RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
-    let mut capturing = false;
+    let mut capture: Option<MonitorCapture> = None;
 
     log::info!("engine started (idle)");
 
@@ -86,21 +95,23 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
     while let Ok(cmd) = rx.recv() {
         match cmd {
             EngineCommand::StartCapture { window_title } => {
-                if !capturing {
-                    log::info!("start capture: '{window_title}'");
-                    // TODO(layer 2): create D3D11 device, open WGC session for
-                    // this window, spin up NVENC encoder + WASAPI audio, begin
-                    // feeding `ring`.
-                    capturing = true;
+                if capture.is_none() {
+                    log::info!("start capture (primary monitor); requested '{window_title}'");
+                    // L2a: capture the primary monitor. L2c will attach the
+                    // NVENC encoder here and begin feeding `ring`; L2e switches
+                    // the target to the foreground window.
+                    match MonitorCapture::start() {
+                        Ok(c) => capture = Some(c),
+                        Err(e) => log::error!("could not start capture: {e:#}"),
+                    }
                 }
             }
             EngineCommand::StopCapture => {
-                if capturing {
+                if capture.take().is_some() {
                     log::info!("stop capture; releasing GPU resources");
-                    // TODO(layer 2): tear down WGC/encoder/audio, keep buffer
-                    // contents so a clip right after alt-tab still works, then
-                    // let it age out.
-                    capturing = false;
+                    // Dropping MonitorCapture closes the session. Buffer
+                    // contents are kept so a clip right after alt-tab still
+                    // works, then age out normally.
                 }
             }
             EngineCommand::SaveClip { seconds, label } => {

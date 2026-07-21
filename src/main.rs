@@ -71,6 +71,8 @@ struct Tray {
     open_clips_id: tray_icon::menu::MenuId,
     open_config_id: tray_icon::menu::MenuId,
     reload_id: tray_icon::menu::MenuId,
+    start_capture_id: tray_icon::menu::MenuId,
+    stop_capture_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     output_dir: std::path::PathBuf,
     config_path: std::path::PathBuf,
@@ -81,11 +83,16 @@ fn build_tray(config: &Config) -> Result<Tray> {
     let open_clips = MenuItem::new("Open clips folder", true, None);
     let open_config = MenuItem::new("Edit settings (config.toml)", true, None);
     let reload = MenuItem::new("Reload settings", true, None);
+    let start_capture = MenuItem::new("Start capture (debug)", true, None);
+    let stop_capture = MenuItem::new("Stop capture (debug)", true, None);
     let quit = MenuItem::new("Quit", true, None);
 
     menu.append(&open_clips)?;
     menu.append(&open_config)?;
     menu.append(&reload)?;
+    menu.append(&PredefinedMenuItem::separator())?;
+    menu.append(&start_capture)?;
+    menu.append(&stop_capture)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit)?;
 
@@ -102,6 +109,8 @@ fn build_tray(config: &Config) -> Result<Tray> {
         open_clips_id: open_clips.id().clone(),
         open_config_id: open_config.id().clone(),
         reload_id: reload.id().clone(),
+        start_capture_id: start_capture.id().clone(),
+        stop_capture_id: stop_capture.id().clone(),
         quit_id: quit.id().clone(),
         output_dir: config.output_dir.clone(),
         config_path: config::config_path().unwrap_or_default(),
@@ -200,6 +209,14 @@ fn run_message_loop(
                     }
                     Err(e) => log::warn!("reload failed: {e}"),
                 }
+            } else if ev.id == tray.start_capture_id {
+                log::info!("debug: start capture");
+                let _ = engine_tx.send(EngineCommand::StartCapture {
+                    window_title: "(debug: primary monitor)".to_string(),
+                });
+            } else if ev.id == tray.stop_capture_id {
+                log::info!("debug: stop capture");
+                let _ = engine_tx.send(EngineCommand::StopCapture);
             } else if ev.id == tray.quit_id {
                 unsafe {
                     windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0);
