@@ -1,61 +1,186 @@
-//! Hardware video encoding (NVENC HEVC / H.264) via Media Foundation.
+//! Hardware video encoding (NVENC HEVC / H.264) via a Media Foundation
+//! hardware encoder MFT.
 //!
-//! We drive the GPU's dedicated encoder block, which is separate silicon from
-//! the CUDA/graphics cores — so encoding a game while playing it costs almost
-//! nothing on the parts of the GPU the game uses. This is the same mechanism
-//! ShadowPlay uses.
+//! Layer 2c-1: enumerate and configure the hardware encoder — prefer HEVC,
+//! fall back to H.264 if no hardware HEVC MFT is present — and report which
+//! one we got. On NVIDIA hardware this MFT is NVENC. The async pump that
+//! actually feeds frames and drains encoded samples into the ring buffer is
+//! L2c-2.
 //!
-//! Two viable paths; we take the Media Foundation one for maintainability:
-//!   * **Media Foundation hardware MFT** (chosen): enumerate the async
-//!     hardware H.265/H.264 encoder transform, feed it the WGC `ID3D11Texture2D`
-//!     surfaces directly (via a DXGI device manager, zero-copy), and pull out
-//!     encoded `IMFSample`s. On NVIDIA hardware MF routes this to NVENC.
-//!   * Raw NVIDIA Video Codec SDK: lowest-level, but requires linking the
-//!     NVENC SDK and hand-rolling surface management. More control, more code.
-//!
-//! Intended implementation (layer 2/3):
-//!   1. `MFStartup`. Create a `IMFDXGIDeviceManager` around the D3D11 device
-//!      shared with capture so encoder input stays on the GPU.
-//!   2. Enumerate `MFT_CATEGORY_VIDEO_ENCODER` for HEVC (or H264), hardware +
-//!      async, prefer the NVIDIA vendor MFT.
-//!   3. Set output type (codec, bitrate = config, fps, resolution), input type
-//!      (NV12 or the capture format), configure VBR + a keyframe interval of
-//!      ~2 s so the ring buffer always has a nearby clip start point.
-//!   4. Pump: on each captured frame, `ProcessInput`; drain `ProcessOutput`
-//!      into `EncodedFrame`s (marking keyframes from
-//!      `MFSampleExtension_CleanPoint`) and push to the ring buffer.
-//!
-//! `UNVERIFIED` — needs Windows + an NVENC-capable GPU.
+//! `UNVERIFIED` until it builds/runs on Windows with an NVENC GPU. Whether a
+//! hardware HEVC MFT is exposed on this GPU/driver is the open question this
+//! step answers empirically (logged at startup).
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
+use windows::Win32::Media::MediaFoundation::{
+    IMFActivate, IMFMediaType, IMFTransform, MFCreateMediaType, MFStartup, MFTEnumEx,
+    MFSetAttributeRatio, MFSetAttributeSize, MFMediaType_Video, MFVideoFormat_H264,
+    MFVideoFormat_HEVC, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
+    MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_ASYNCMFT, MFT_ENUM_FLAG_HARDWARE,
+    MFT_ENUM_FLAG_SORTANDFILTER, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE,
+    MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+    MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+};
+use windows::Win32::System::Com::CoTaskMemFree;
 
-use crate::config::EncoderConfig;
-use crate::ringbuffer::EncodedFrame;
+use crate::config::{Codec, EncoderConfig};
 
-/// Handle to a running hardware encoder session.
+// MF_VERSION = (MF_SDK_VERSION << 16) | MF_API_VERSION = (0x2 << 16) | 0x70.
+const MF_VERSION: u32 = (0x0002 << 16) | 0x0070;
+const MFSTARTUP_FULL: u32 = 0;
+
+/// A configured hardware video encoder. The async pump (L2c-2) will drive this
+/// transform to produce encoded frames.
 pub struct VideoEncoder {
+    _transform: IMFTransform,
+    /// The codec we actually got (may differ from requested if HEVC hardware
+    /// encoding isn't available and we fell back to H.264).
+    pub codec: Codec,
     pub width: u32,
     pub height: u32,
-    pub cfg: EncoderConfig,
 }
 
 impl VideoEncoder {
-    /// Create the hardware encoder for the given resolution and settings.
-    ///
-    /// Layer 1 stub.
-    pub fn new(_width: u32, _height: u32, _cfg: EncoderConfig) -> Result<VideoEncoder> {
-        anyhow::bail!("hardware encoder not implemented until layer 2/3")
+    /// Enumerate + configure a hardware encoder for the given size/settings.
+    /// Tries HEVC first (unless H.264 was requested), falling back to H.264.
+    pub fn new(_device: &ID3D11Device, width: u32, height: u32, cfg: &EncoderConfig) -> Result<Self> {
+        unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.context("MFStartup")?;
+
+        // Try requested codec first, then the other as fallback.
+        let order = match cfg.codec {
+            Codec::Hevc => [Codec::Hevc, Codec::H264],
+            Codec::H264 => [Codec::H264, Codec::Hevc],
+        };
+
+        let mut chosen: Option<(IMFTransform, Codec)> = None;
+        for codec in order {
+            match find_encoder(codec) {
+                Ok(Some(t)) => {
+                    chosen = Some((t, codec));
+                    break;
+                }
+                Ok(None) => {
+                    log::info!("no hardware {} encoder found", codec_name(codec));
+                }
+                Err(e) => log::warn!("enumerating {} encoder: {e:#}", codec_name(codec)),
+            }
+        }
+
+        let (transform, codec) =
+            chosen.context("no hardware HEVC or H.264 encoder MFT available")?;
+
+        configure(&transform, codec, width, height, cfg)
+            .with_context(|| format!("configuring {} encoder", codec_name(codec)))?;
+
+        log::info!(
+            "encoder ready: {} {}x{} @ {}fps, {} Mbps",
+            codec_name(codec),
+            width,
+            height,
+            cfg.fps,
+            cfg.bitrate_mbps
+        );
+
+        Ok(Self {
+            _transform: transform,
+            codec,
+            width,
+            height,
+        })
+    }
+}
+
+fn codec_name(c: Codec) -> &'static str {
+    match c {
+        Codec::Hevc => "HEVC",
+        Codec::H264 => "H.264",
+    }
+}
+
+fn subtype(c: Codec) -> windows::core::GUID {
+    match c {
+        Codec::Hevc => MFVideoFormat_HEVC,
+        Codec::H264 => MFVideoFormat_H264,
+    }
+}
+
+/// Enumerate hardware encoder MFTs producing `codec` and activate the first.
+fn find_encoder(codec: Codec) -> Result<Option<IMFTransform>> {
+    let output_info = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: subtype(codec),
+    };
+
+    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+    let mut count: u32 = 0;
+    unsafe {
+        MFTEnumEx(
+            MFT_CATEGORY_VIDEO_ENCODER,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+            None,
+            Some(&output_info as *const MFT_REGISTER_TYPE_INFO),
+            &mut activates,
+            &mut count,
+        )
+    }
+    .context("MFTEnumEx")?;
+
+    if count == 0 || activates.is_null() {
+        return Ok(None);
     }
 
-    /// Submit a captured GPU frame; returns any encoded frames now ready.
-    ///
-    /// Layer 1 stub.
-    pub fn submit(&mut self, _timestamp_100ns: i64) -> Result<Vec<EncodedFrame>> {
-        Ok(Vec::new())
+    // Take ownership of the first activate; release the rest; free the array.
+    let list = unsafe { std::slice::from_raw_parts_mut(activates, count as usize) };
+    let first = list[0].take();
+    for item in list.iter_mut() {
+        let _ = item.take();
+    }
+    unsafe { CoTaskMemFree(Some(activates as *const _)) };
+
+    let activate = match first {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+    let transform: IMFTransform =
+        unsafe { activate.ActivateObject() }.context("ActivateObject IMFTransform")?;
+    Ok(Some(transform))
+}
+
+/// Set the encoder's output (compressed) and input (NV12) media types.
+fn configure(
+    transform: &IMFTransform,
+    codec: Codec,
+    width: u32,
+    height: u32,
+    cfg: &EncoderConfig,
+) -> Result<()> {
+    let bitrate = cfg.bitrate_mbps.saturating_mul(1_000_000);
+
+    // Output type (compressed) must be set before the input type.
+    let out: IMFMediaType = unsafe { MFCreateMediaType() }.context("MFCreateMediaType out")?;
+    unsafe {
+        out.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        out.SetGUID(&MF_MT_SUBTYPE, &subtype(codec))?;
+        out.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
+        out.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+        MFSetAttributeSize(&out, &MF_MT_FRAME_SIZE, width, height)?;
+        MFSetAttributeRatio(&out, &MF_MT_FRAME_RATE, cfg.fps, 1)?;
+        MFSetAttributeRatio(&out, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+        transform.SetOutputType(0, &out, 0)?;
     }
 
-    /// Flush the encoder and return any remaining buffered output.
-    pub fn drain(&mut self) -> Result<Vec<EncodedFrame>> {
-        Ok(Vec::new())
+    // Input type: NV12.
+    let inp: IMFMediaType = unsafe { MFCreateMediaType() }.context("MFCreateMediaType in")?;
+    unsafe {
+        inp.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        inp.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+        inp.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+        MFSetAttributeSize(&inp, &MF_MT_FRAME_SIZE, width, height)?;
+        MFSetAttributeRatio(&inp, &MF_MT_FRAME_RATE, cfg.fps, 1)?;
+        MFSetAttributeRatio(&inp, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+        transform.SetInputType(0, &inp, 0)?;
     }
+
+    Ok(())
 }

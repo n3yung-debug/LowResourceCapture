@@ -31,7 +31,9 @@ use windows::Win32::System::WinRT::Direct3D11::{
 };
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 
+use crate::config::EncoderConfig;
 use crate::convert::Nv12Converter;
+use crate::encoder::VideoEncoder;
 
 /// A running WGC capture of the primary monitor. Holds every COM object alive
 /// for the lifetime of the capture; dropping it stops the session.
@@ -41,13 +43,15 @@ pub struct MonitorCapture {
     _item: GraphicsCaptureItem,
     _device: ID3D11Device,
     _context: ID3D11DeviceContext,
+    _encoder: VideoEncoder,
     frames: Arc<AtomicU64>,
 }
 
 impl MonitorCapture {
     /// Start capturing the primary monitor. Each frame is converted to NV12;
-    /// arrivals are logged periodically.
-    pub fn start() -> Result<Self> {
+    /// arrivals are logged periodically. A hardware encoder is created (L2c-1)
+    /// but not yet fed frames (that's L2c-2).
+    pub fn start(encoder_cfg: EncoderConfig) -> Result<Self> {
         let (device, context) = create_d3d11_device()?;
         let winrt_device = to_winrt_device(&device)?;
         let item = primary_monitor_item()?;
@@ -70,6 +74,9 @@ impl MonitorCapture {
         // Converter + reusable NV12 target texture, moved into the callback.
         let converter = Nv12Converter::new(&device, &context, width, height)?;
         let nv12 = converter.create_nv12_texture()?;
+
+        // Hardware encoder (created here; fed frames in L2c-2).
+        let encoder = VideoEncoder::new(&device, width, height, &encoder_cfg)?;
 
         let frames = Arc::new(AtomicU64::new(0));
         let frames_cb = frames.clone();
@@ -121,6 +128,7 @@ impl MonitorCapture {
             _item: item,
             _device: device,
             _context: context,
+            _encoder: encoder,
             frames,
         })
     }

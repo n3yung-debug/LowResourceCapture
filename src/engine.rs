@@ -100,7 +100,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     // L2a: capture the primary monitor. L2c will attach the
                     // NVENC encoder here and begin feeding `ring`; L2e switches
                     // the target to the foreground window.
-                    match MonitorCapture::start() {
+                    match MonitorCapture::start(config.encoder.clone()) {
                         Ok(c) => capture = Some(c),
                         Err(e) => log::error!("could not start capture: {e:#}"),
                     }
