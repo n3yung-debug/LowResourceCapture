@@ -195,20 +195,18 @@ pub fn config_path() -> Result<PathBuf> {
     Ok(app_data_dir()?.join("config.toml"))
 }
 
-/// Default clips output directory.
+/// Default clips output directory: `<Videos>\LowResourceCapture`.
 ///
-/// Prefers a dedicated `D:\Videos` drive when it exists (that's where large
-/// media usually lives), otherwise falls back to the Windows "Videos" known
-/// folder. Either way this is just the *default* — `output_dir` in
-/// config.toml overrides it, so point it wherever you like.
+/// `<Videos>` is resolved from the Windows "Videos" **known folder**, so it
+/// honors a relocated library automatically — if your Videos library lives on
+/// `D:\Videos`, that's what this returns, with no hardcoded drive letter. The
+/// `LowResourceCapture` folder is created on first save if it doesn't exist.
+///
+/// This is only the *default* — `output_dir` in config.toml overrides it, so
+/// point it wherever you like.
 fn default_output_dir() -> PathBuf {
-    let d_videos = PathBuf::from(r"D:\Videos");
-    let base = if d_videos.is_dir() {
-        d_videos
-    } else {
-        directories::UserDirs::new()
-            .and_then(|d| d.video_dir().map(|v| v.to_path_buf()))
-            .unwrap_or_else(|| PathBuf::from("."))
-    };
-    base.join("LowResourceCapture")
+    let videos = directories::UserDirs::new()
+        .and_then(|d| d.video_dir().map(|v| v.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    videos.join("LowResourceCapture")
 }

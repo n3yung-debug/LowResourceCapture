@@ -22,14 +22,18 @@ use windows::Win32::System::SystemInformation::GetLocalTime;
 
 use crate::ringbuffer::EncodedFrame;
 
-/// Build the output filename: `<game>_<yyyymmdd-hhmmss>_<len>s.mp4`
-pub fn clip_filename(output_dir: &Path, game: &str, len_secs: u32) -> PathBuf {
+/// Build the output filename: `clip_<yyyymmdd-hhmmss>_<len>s.mp4`.
+///
+/// `output_dir` is the per-source subfolder (e.g. `...\LowResourceCapture\
+/// Elden Ring`), so the source is conveyed by the folder rather than repeated
+/// in every filename.
+pub fn clip_filename(output_dir: &Path, len_secs: u32) -> PathBuf {
     let st = unsafe { GetLocalTime() };
     let stamp = format!(
         "{:04}{:02}{:02}-{:02}{:02}{:02}",
         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond
     );
-    output_dir.join(format!("{}_{}_{}s.mp4", sanitize(game), stamp, len_secs))
+    output_dir.join(format!("clip_{}_{}s.mp4", stamp, len_secs))
 }
 
 /// Mux pre-encoded video frames into `out_path` (mp4) without re-encoding.
@@ -81,21 +85,3 @@ unsafe fn build_sample(data: &[u8], pts_100ns: i64, dur_100ns: i64, keyframe: bo
     Ok(sample)
 }
 
-fn sanitize(name: &str) -> String {
-    let cleaned: String = name
-        .trim()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if cleaned.is_empty() {
-        "clip".to_string()
-    } else {
-        cleaned
-    }
-}

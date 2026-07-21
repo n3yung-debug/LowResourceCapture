@@ -11,6 +11,18 @@ that never reached the log. This build enables **D3D11 multithread protection**
 (`ID3D11Multithread::SetMultithreadProtected`), which Media Foundation requires
 whenever a device is shared this way.
 
+### New: clips filed by source, in your Videos library
+Clips now save to **`<Videos>\LowResourceCapture\<source>\`**, where `<Videos>`
+is your real Windows "Videos" **known folder** (so a relocated library like
+`D:\Videos` is picked up automatically — no hardcoded drive), and `<source>` is
+the app that was in the foreground when you hit the hotkey:
+- a game → its own folder (e.g. `…\LowResourceCapture\eldenring\`),
+- any browser → `…\LowResourceCapture\Browser\`,
+- desktop / unknown → `…\LowResourceCapture\Desktop\`.
+
+The base folder and each subfolder are **created on demand** — nothing to set
+up. (You can still override the base location in tray → **Settings…**.)
+
 > Still **video only** (game + mic audio muxing is the next build). Capture is
 > started from the tray (auto game-detect is L5).
 
@@ -20,9 +32,10 @@ whenever a device is shared this way.
 3. Wait ~5 seconds (or play a game / move windows around).
 4. Press a clip hotkey: **F9** = 15s, **F10** = 30s, **F11** = 60s
    (all editable in tray → **Settings…**).
-5. Open your clips folder (default `D:\Videos\LowResourceCapture`) and **play
-   `clip_<date-time>_<len>s.mp4`**. If it plays back your last N seconds — the
-   whole GPU pipeline works. 🎉
+5. Open your clips folder (tray → **Open clips folder**, e.g.
+   `D:\Videos\LowResourceCapture`), go into the **`<source>`** subfolder, and
+   **play `clip_<date-time>_<len>s.mp4`**. If it plays back your last N
+   seconds — the whole GPU pipeline works. 🎉
 
 The log (`%APPDATA%\LowResourceCapture\lowresourcecapture.log`) should now show
 `capture->encode: … frames` and `encode: … frames (… keyframes)` ticking every

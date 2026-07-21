@@ -160,8 +160,13 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     );
                     // TODO(layer 5): toast "Nothing to clip yet".
                 } else if let Some(vtype) = video_out_type.as_ref() {
-                    std::fs::create_dir_all(&config.output_dir).ok();
-                    let path = muxer::clip_filename(&config.output_dir, "clip", seconds);
+                    // File the clip under a per-source subfolder named for the
+                    // foreground app (game exe, or "Browser"/"Desktop"), created
+                    // on demand: <output_dir>\<source>\clip_<stamp>_<len>s.mp4.
+                    let source = crate::game_detect::foreground_app_folder();
+                    let dir = config.output_dir.join(&source);
+                    std::fs::create_dir_all(&dir).ok();
+                    let path = muxer::clip_filename(&dir, seconds);
                     match muxer::write_clip(&path, vtype, &frames) {
                         Ok(()) => log::info!(
                             "saved '{label}' clip: {seconds}s, {} frames -> {}",

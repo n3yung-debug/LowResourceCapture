@@ -19,10 +19,96 @@
 
 use crate::config::Config;
 
+use windows::core::PWSTR;
+use windows::Win32::Foundation::{CloseHandle, HWND, MAX_PATH};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GameEvent {
     Started { title: String, exe: String },
     Stopped,
+}
+
+/// Browser executables all collapse into a single "Browser" folder.
+const BROWSERS: &[&str] = &[
+    "chrome", "msedge", "firefox", "brave", "opera", "opera_gx", "vivaldi", "arc", "zen",
+    "iexplore", "chromium",
+];
+
+/// Friendly subfolder name for the app currently in the foreground, used to
+/// file clips under the output dir (e.g. `LowResourceCapture\Elden Ring\`,
+/// `LowResourceCapture\Browser\`). Known browsers collapse to "Browser";
+/// anything else uses its executable name. Never fails — falls back to
+/// "Desktop" so a clip always lands somewhere sensible.
+pub fn foreground_app_folder() -> String {
+    match foreground_exe_stem() {
+        Some(stem) => {
+            if BROWSERS.contains(&stem.to_lowercase().as_str()) {
+                "Browser".to_string()
+            } else {
+                folderize(&stem)
+            }
+        }
+        None => "Desktop".to_string(),
+    }
+}
+
+/// File stem (no `.exe`) of the foreground window's process image, e.g.
+/// "eldenring" for `C:\...\eldenring.exe`.
+fn foreground_exe_stem() -> Option<String> {
+    unsafe {
+        let hwnd: HWND = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false.into(), pid).ok()?;
+
+        let mut buf = [0u16; MAX_PATH as usize];
+        let mut size = buf.len() as u32;
+        let res = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut size,
+        );
+        let _ = CloseHandle(handle);
+        res.ok()?;
+
+        let full = String::from_utf16_lossy(&buf[..size as usize]);
+        std::path::Path::new(&full)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+    }
+}
+
+/// Turn an executable stem into a safe, readable folder name.
+fn folderize(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().to_string();
+    if cleaned.is_empty() {
+        "Capture".to_string()
+    } else {
+        cleaned
+    }
 }
 
 /// Decide, from an observed foreground window, whether it should count as a
