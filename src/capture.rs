@@ -8,7 +8,7 @@
 //! `UNVERIFIED` until it builds/runs on Windows.
 
 use anyhow::{Context, Result};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows::core::{IInspectable, Interface, Ref};
@@ -169,6 +169,10 @@ impl Drop for MonitorCapture {
     }
 }
 
+/// Logs each step of the *first* processed frame exactly once, so if the
+/// pipeline crashes on frame 1 the log shows the last step that succeeded.
+static FIRST_FRAME: AtomicBool = AtomicBool::new(true);
+
 /// Convert one captured frame to NV12 and submit it to the encoder pump.
 fn process_frame(
     frame: &Direct3D11CaptureFrame,
@@ -177,12 +181,22 @@ fn process_frame(
     ts: i64,
     dur_100ns: i64,
 ) -> Result<()> {
+    let first = FIRST_FRAME.swap(false, Ordering::Relaxed);
+    macro_rules! step {
+        ($($a:tt)*) => { if first { log::info!($($a)*); } };
+    }
+
+    step!("frame1: begin");
     let bgra = frame_texture(frame)?;
+    step!("frame1: got BGRA capture texture");
     // Fresh NV12 texture per frame so in-flight encoder samples don't alias.
     let nv12 = converter.create_nv12_texture()?;
+    step!("frame1: NV12 texture allocated");
     converter.convert(&bgra, &nv12)?;
+    step!("frame1: converted BGRA->NV12");
     // The pump thread builds the IMFSample; we only send the (Send) texture.
     let _ = tx.send((nv12, ts, dur_100ns));
+    step!("frame1: NV12 handed to encoder pump");
     Ok(())
 }
 

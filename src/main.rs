@@ -12,6 +12,7 @@ mod engine;
 mod game_detect;
 mod gui;
 mod hotkeys;
+mod logging;
 mod muxer;
 mod ringbuffer;
 
@@ -40,10 +41,13 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    init_logging();
-
     // Second process mode: show the settings window instead of the tray app.
-    if std::env::args().any(|a| a == "--gui") {
+    let is_gui = std::env::args().any(|a| a == "--gui");
+    // Main process starts a fresh log; the GUI subprocess appends so it doesn't
+    // wipe the main log.
+    init_logging(!is_gui);
+
+    if is_gui {
         log::info!("launching settings GUI");
         return gui::run();
     }
@@ -80,6 +84,7 @@ struct Tray {
     open_clips_id: tray_icon::menu::MenuId,
     reload_id: tray_icon::menu::MenuId,
     start_capture_id: tray_icon::menu::MenuId,
+    start_capture_video_id: tray_icon::menu::MenuId,
     stop_capture_id: tray_icon::menu::MenuId,
     dump_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
@@ -92,6 +97,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
     let open_clips = MenuItem::new("Open clips folder", true, None);
     let reload = MenuItem::new("Reload settings", true, None);
     let start_capture = MenuItem::new("Start capture (debug)", true, None);
+    let start_capture_video = MenuItem::new("Start capture — video only (debug)", true, None);
     let stop_capture = MenuItem::new("Stop capture (debug)", true, None);
     let dump = MenuItem::new("Dump raw buffer (debug)", true, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -101,6 +107,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
     menu.append(&reload)?;
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&start_capture)?;
+    menu.append(&start_capture_video)?;
     menu.append(&stop_capture)?;
     menu.append(&dump)?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -120,6 +127,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
         open_clips_id: open_clips.id().clone(),
         reload_id: reload.id().clone(),
         start_capture_id: start_capture.id().clone(),
+        start_capture_video_id: start_capture_video.id().clone(),
         stop_capture_id: stop_capture.id().clone(),
         dump_id: dump.id().clone(),
         quit_id: quit.id().clone(),
@@ -216,9 +224,16 @@ fn run_message_loop(
             } else if ev.id == tray.reload_id {
                 reload_config_and_hotkeys(router, engine_tx);
             } else if ev.id == tray.start_capture_id {
-                log::info!("debug: start capture");
+                log::info!("debug: start capture (video + audio)");
                 let _ = engine_tx.send(EngineCommand::StartCapture {
                     window_title: "(debug: primary monitor)".to_string(),
+                    with_audio: true,
+                });
+            } else if ev.id == tray.start_capture_video_id {
+                log::info!("debug: start capture (video only)");
+                let _ = engine_tx.send(EngineCommand::StartCapture {
+                    window_title: "(debug: primary monitor, video only)".to_string(),
+                    with_audio: false,
                 });
             } else if ev.id == tray.stop_capture_id {
                 log::info!("debug: stop capture");
@@ -305,13 +320,11 @@ fn show_error_box(msg: &str) {
     }
 }
 
-fn init_logging() {
-    // Log to a file next to the config so windowed builds still leave a trail.
-    if let Ok(dir) = config::app_data_dir() {
-        std::fs::create_dir_all(&dir).ok();
-        let log_path = dir.join("lowresourcecapture.log");
-        let _ = simple_logging::log_to_file(&log_path, log::LevelFilter::Info);
-    } else {
-        let _ = simple_logging::log_to_stderr(log::LevelFilter::Info);
-    }
+fn init_logging(truncate: bool) {
+    // Log to `<install>\logs\` with per-line flushing + crash capture so a
+    // silent COM/Direct3D crash still leaves a complete trail. Fall back to a
+    // temp dir if the install dir can't be resolved (shouldn't happen).
+    let path = config::log_path()
+        .unwrap_or_else(|_| std::env::temp_dir().join("lowresourcecapture.log"));
+    logging::init(&path, truncate);
 }

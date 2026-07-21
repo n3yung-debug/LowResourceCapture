@@ -30,8 +30,9 @@ use crate::ringbuffer::RingBuffer;
 pub enum EngineCommand {
     /// Save the last `seconds` of buffered footage. `label` is the preset name.
     SaveClip { seconds: u32, label: String },
-    /// A game became active — begin capturing this window/process.
-    StartCapture { window_title: String },
+    /// A game became active — begin capturing this window/process. `with_audio`
+    /// is false for the "video only" debug path (used to bisect crashes).
+    StartCapture { window_title: String, with_audio: bool },
     /// The active game exited — stop capturing and free GPU resources.
     StopCapture,
     /// Reload settings (hotkeys are re-registered by the caller).
@@ -117,9 +118,12 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
     // which get pushed into `ring`.
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            EngineCommand::StartCapture { window_title } => {
+            EngineCommand::StartCapture { window_title, with_audio } => {
                 if capture.is_none() {
-                    log::info!("start capture (primary monitor); requested '{window_title}'");
+                    log::info!(
+                        "start capture (primary monitor); requested '{window_title}' \
+                         (audio: {with_audio})"
+                    );
                     // L2a: capture the primary monitor. L2c will attach the
                     // NVENC encoder here and begin feeding `ring`; L2e switches
                     // the target to the foreground window.
@@ -134,7 +138,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                         }
                         Err(e) => log::error!("could not start capture: {e:#}"),
                     }
-                    if audio.is_none() {
+                    if with_audio && audio.is_none() {
                         audio =
                             AudioCapture::start(config.audio, audio_ring.clone(), mic_ring.clone())
                                 .ok();

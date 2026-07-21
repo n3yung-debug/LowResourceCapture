@@ -187,6 +187,14 @@ fn capture_loop(
         let mut total_frames: i64 = 0;
         let mut aac_frames: u64 = 0;
         let mut last = Instant::now();
+        // First-buffer markers (per worker) so an audio-path crash is pinpointed.
+        let tag = if loopback { "audio-game" } else { "audio-mic" };
+        let (mut lg_buf, mut lg_pcm, mut lg_in) = (false, false, false);
+        macro_rules! once {
+            ($flag:ident, $($a:tt)*) => {
+                if !$flag { log::info!($($a)*); $flag = true; }
+            };
+        }
 
         while !shutdown.load(Ordering::Relaxed) {
             let _ = WaitForSingleObject(event, 200);
@@ -201,14 +209,17 @@ fn capture_loop(
                 {
                     break;
                 }
+                once!(lg_buf, "{tag}: first buffer ({nframes} frames, {src_bits}-bit src)");
 
                 let pcm = to_i16_pcm(pdata, nframes, src_channels, src_bits, channels);
+                once!(lg_pcm, "{tag}: first PCM converted ({} bytes)", pcm.len());
                 let pts = total_frames * HNS_PER_SEC / rate as i64;
                 let dur = nframes as i64 * HNS_PER_SEC / rate as i64;
                 total_frames += nframes as i64;
 
                 if let Ok(sample) = make_pcm_sample(&pcm, pts, dur) {
                     if encoder.ProcessInput(0, &sample, 0).is_ok() {
+                        once!(lg_in, "{tag}: first AAC ProcessInput accepted");
                         drain_aac(&encoder, ring, &mut aac_frames);
                     }
                 }

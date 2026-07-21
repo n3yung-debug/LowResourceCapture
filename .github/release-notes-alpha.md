@@ -1,66 +1,48 @@
-## LowResourceCapture — alpha: installs to Program Files 📦
+## LowResourceCapture — alpha: crash-hunting build 🔬
 
-### New: installs to `C:\Program Files (x86)\LowResourceCapture`
-The program now installs machine-wide to **`C:\Program Files (x86)\LowResourceCapture`**
-(created if it doesn't exist; an existing install is detected and reused on
-upgrade). Because that's a protected system folder, **setup now asks for admin
-(a UAC prompt)** — so on this build you'll see two prompts: the unsigned-app
-SmartScreen warning, then the UAC elevation prompt. Both are expected.
+The previous build still crashed the moment you hit **Start capture**, and the
+old log couldn't show why (its last lines were being lost when the process was
+killed). This build is built to **catch the crash red-handed** — and it moves
+the logs + config into the install folder as requested.
 
-> Heads-up: if you had the previous **per-user** build installed (under
-> `…\AppData\Local\Programs\LowResourceCapture`), uninstall it first from
-> *Apps & features* so you don't end up with two copies. Your saved clips and
-> settings are untouched by uninstalling.
+### What's new for debugging
+- **The log now flushes every line to disk instantly**, so it's complete right
+  up to the crash — the last line you see is the last thing that actually ran.
+- **A crash handler** logs the exact failure (a Rust error vs. a GPU/driver
+  "access violation," with the faulting thread + address) before the process
+  dies.
+- **Step-by-step markers** through the first video frame, the encoder, and the
+  first audio buffer, so the log names the precise operation that crashed.
+- **New tray item: "Start capture — video only (debug)"** — lets us split the
+  problem in half (video pipeline vs. audio pipeline) in one click.
+
+### Logs + config moved into the install folder
+- Log: **`C:\Program Files (x86)\LowResourceCapture\logs\lowresourcecapture.log`**
+- Config: **`C:\Program Files (x86)\LowResourceCapture\config.toml`**
+
+The installer grants your account write access to that folder so the app (which
+runs non-elevated) can write there. **Nothing lives in `%APPDATA%` anymore** —
+those were the only two files that ever did.
 
 ---
 
-Also in this build (from v0.1.5, in case you're jumping straight here):
+## Please run this quick sequence and send me the log 🙏
+1. Install over the top (SmartScreen → *More info → Run anyway*, then UAC → *Yes*).
+2. Tray → **Start capture — video only (debug)**. Wait ~5 seconds.
+   - If it **crashes**, the problem is in the video pipeline.
+   - If it **survives**, press **F9** to save a clip, then do step 3.
+3. Tray → **Start capture (debug)** (video **+** audio). Wait ~5 seconds.
+   - If this one crashes but video-only didn't, the problem is in the audio path.
+4. Either way, send me
+   **`C:\Program Files (x86)\LowResourceCapture\logs\lowresourcecapture.log`**.
 
-**Crash on "Start capture" is fixed.** An earlier build brought the HEVC encoder
-up correctly, then died the instant frames started flowing.
+The new last lines (a `frame1: …`, `pump: …`, or `audio-…: …` marker, and
+hopefully an `UNHANDLED EXCEPTION …` line) will tell me exactly where it dies —
+no more guessing.
 
-**Cause:** the one D3D11 GPU device is shared across three threads (WGC capture,
-the BGRA→NV12 converter, and the NVENC encoder via Media Foundation's DXGI
-device manager). Direct3D 11's immediate context isn't thread-safe by default,
-so those threads raced and the process hit an access violation — a hard crash
-that never reached the log. This build enables **D3D11 multithread protection**
-(`ID3D11Multithread::SetMultithreadProtected`), which Media Foundation requires
-whenever a device is shared this way.
-
-### New: clips filed by source, in your Videos library
-Clips now save to **`<Videos>\LowResourceCapture\<source>\`**, where `<Videos>`
-is your real Windows "Videos" **known folder** (so a relocated library like
-`D:\Videos` is picked up automatically — no hardcoded drive), and `<source>` is
-the app that was in the foreground when you hit the hotkey:
-- a game → its own folder (e.g. `…\LowResourceCapture\eldenring\`),
-- any browser → `…\LowResourceCapture\Browser\`,
-- desktop / unknown → `…\LowResourceCapture\Desktop\`.
-
-The base folder and each subfolder are **created on demand** — nothing to set
-up. (You can still override the base location in tray → **Settings…**.)
-
-> Still **video only** (game + mic audio muxing is the next build). Capture is
-> started from the tray (auto game-detect is L5).
-
-### Try it
-1. Install (SmartScreen → **More info → Run anyway** — unsigned).
-2. Tray → **Start capture (debug)** (captures your primary monitor).
-3. Wait ~5 seconds (or play a game / move windows around).
-4. Press a clip hotkey: **F9** = 15s, **F10** = 30s, **F11** = 60s
-   (all editable in tray → **Settings…**).
-5. Open your clips folder (tray → **Open clips folder**, e.g.
-   `D:\Videos\LowResourceCapture`), go into the **`<source>`** subfolder, and
-   **play `clip_<date-time>_<len>s.mp4`**. If it plays back your last N
-   seconds — the whole GPU pipeline works. 🎉
-
-The log (`%APPDATA%\LowResourceCapture\lowresourcecapture.log`) should now show
-`capture->encode: … frames` and `encode: … frames (… keyframes)` ticking every
-second while capturing, then `saved … clip -> <path>` on a hotkey.
-
-### If it still crashes
-Grab `%APPDATA%\LowResourceCapture\lowresourcecapture.log` — the last lines
-(especially anything with `error`, `failed`, or a `frame … pipeline error`)
-tell me exactly where it stopped.
+> Still **video only** in saved clips (audio muxing is L4b). Capture is started
+> from the tray; auto game-detect is L5. Clips still save to
+> `<Videos>\LowResourceCapture\<source>\`.
 
 ### Note
-Unsigned installer — SmartScreen warning is expected.
+Unsigned installer — SmartScreen + UAC prompts are expected.

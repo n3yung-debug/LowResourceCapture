@@ -256,6 +256,13 @@ fn pump_loop(
     let mut frames_out: u64 = 0;
     let mut key_out: u64 = 0;
     let mut last_stats = Instant::now();
+    // First-time markers so a crash on the first encode shows the last good step.
+    let (mut lg_need, mut lg_sample, mut lg_in, mut lg_out) = (false, false, false, false);
+    macro_rules! once {
+        ($flag:ident, $($a:tt)*) => {
+            if !$flag { log::info!($($a)*); $flag = true; }
+        };
+    }
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
@@ -265,13 +272,19 @@ fn pump_loop(
         // Satisfy any outstanding input requests with captured frames.
         if pending_input > 0 {
             match rx.try_recv() {
-                Ok((tex, pts, dur)) => {
-                    if let Ok(sample) = make_nv12_sample(&tex, pts, dur) {
-                        if unsafe { transform.ProcessInput(0, &sample, 0) }.is_ok() {
-                            pending_input -= 1;
+                Ok((tex, pts, dur)) => match make_nv12_sample(&tex, pts, dur) {
+                    Ok(sample) => {
+                        once!(lg_sample, "pump: first NV12 sample built");
+                        match unsafe { transform.ProcessInput(0, &sample, 0) } {
+                            Ok(()) => {
+                                once!(lg_in, "pump: first ProcessInput accepted");
+                                pending_input -= 1;
+                            }
+                            Err(e) => once!(lg_in, "pump: first ProcessInput error: {e:?}"),
                         }
                     }
-                }
+                    Err(e) => once!(lg_sample, "pump: make_nv12_sample error: {e:#}"),
+                },
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => break,
             }
@@ -283,9 +296,11 @@ fn pump_loop(
             Ok(event) => {
                 let met = unsafe { event.GetType() }.unwrap_or(0);
                 if met == ME_TRANSFORM_NEED_INPUT {
+                    once!(lg_need, "pump: first NeedInput event");
                     pending_input += 1;
                 } else if met == ME_TRANSFORM_HAVE_OUTPUT {
                     if let Some(frame) = drain_output(transform) {
+                        once!(lg_out, "pump: first encoded output ({} bytes)", frame.data.len());
                         let key = frame.keyframe;
                         if let Ok(mut r) = ring.lock() {
                             r.push(frame);

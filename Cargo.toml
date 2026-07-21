@@ -1,6 +1,6 @@
 [package]
 name = "lowresourcecapture"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Low-overhead retroactive game clip recorder for Windows (NVENC/HEVC, ring-buffer instant replay)"
 license = "MIT"
@@ -30,7 +30,6 @@ anyhow = "1"
 wry = "0.55"    # 0.55.1
 tao = "0.35"    # 0.35.3
 log = "0.4"
-simple-logging = "2"
 directories = "5"
 
 # windows-rs: only the feature namespaces we actually touch, to keep the
@@ -44,6 +43,7 @@ features = [
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
     "Win32_System_Variant",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_WinRT",

@@ -182,17 +182,25 @@ impl Config {
     }
 }
 
-/// `%APPDATA%\LowResourceCapture` — single base dir for config + logs.
-/// Kept flat (no nested config/ or data/ subfolders) so paths are predictable
-/// and the uninstaller can remove it wholesale.
-pub fn app_data_dir() -> Result<PathBuf> {
-    let base = directories::BaseDirs::new().context("resolving %APPDATA%")?;
-    Ok(base.config_dir().join("LowResourceCapture"))
+/// The install directory (where the running exe lives) — e.g.
+/// `C:\Program Files (x86)\LowResourceCapture`. Config and logs live here now
+/// (the installer grants the current user write access to this folder, since
+/// Program Files is otherwise read-only to a non-elevated process).
+pub fn install_dir() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("locating current exe")?;
+    exe.parent()
+        .map(|p| p.to_path_buf())
+        .context("exe has no parent directory")
 }
 
-/// `%APPDATA%\LowResourceCapture\config.toml`
+/// `<install>\config.toml`
 pub fn config_path() -> Result<PathBuf> {
-    Ok(app_data_dir()?.join("config.toml"))
+    Ok(install_dir()?.join("config.toml"))
+}
+
+/// `<install>\logs\lowresourcecapture.log`
+pub fn log_path() -> Result<PathBuf> {
+    Ok(install_dir()?.join("logs").join("lowresourcecapture.log"))
 }
 
 /// Default clips output directory: `<Videos>\LowResourceCapture`.

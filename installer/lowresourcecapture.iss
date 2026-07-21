@@ -43,6 +43,14 @@ ArchitecturesAllowed=x64compatible
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Dirs]
+; The app runs non-elevated (tray app / run-at-startup), but Program Files is
+; read-only to non-elevated processes. Grant the Users group modify rights so
+; the app can write its config.toml and logs here. `logs` is created up front so
+; logging always has a writable target.
+Name: "{app}"; Permissions: users-modify
+Name: "{app}\logs"; Permissions: users-modify
+
 [Tasks]
 Name: "startup"; Description: "Start {#MyAppName} automatically when Windows starts"; GroupDescription: "Startup:"; Flags: checkedonce
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
@@ -74,7 +82,10 @@ Filename: "{app}\{#MyAppExe}"; Description: "Launch {#MyAppName} now"; Flags: no
 Filename: "{cmd}"; Parameters: "/C taskkill /IM {#MyAppExe} /F & exit 0"; Flags: runhidden; RunOnceId: "StopApp"
 
 [UninstallDelete]
-; Remove all app data (config.toml + logs) on uninstall so nothing is left
-; behind. This is under %APPDATA%\{#MyAppName} and is SEPARATE from your saved
-; clips, which live in your Videos folder and are intentionally left untouched.
+; Remove runtime-created config + logs (they live in the install dir now) so the
+; folder is left clean. SEPARATE from your saved clips, which live in your Videos
+; folder and are intentionally left untouched.
+Type: filesandordirs; Name: "{app}\logs"
+Type: files; Name: "{app}\config.toml"
+; Also clean up the old per-user data location from previous versions.
 Type: filesandordirs; Name: "{userappdata}\{#MyAppName}"
