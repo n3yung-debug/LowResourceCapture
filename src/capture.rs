@@ -113,9 +113,17 @@ impl MonitorCapture {
             move |pool: Ref<Direct3D11CaptureFramePool>, _args: Ref<IInspectable>| {
                 if let Some(pool) = pool.as_ref() {
                     if let Ok(frame) = pool.TryGetNextFrame() {
+                        if FIRST_ARRIVAL.swap(false, Ordering::Relaxed) {
+                            log::info!("FrameArrived: first callback fired");
+                        }
                         let ts = frame.SystemRelativeTime().map(|t| t.Duration).unwrap_or(0);
                         let last = last_ts_cb.load(Ordering::Relaxed);
-                        if ts.wrapping_sub(last) >= min_interval {
+                        // saturating_sub, NOT wrapping_sub: the sentinel start
+                        // value (i64::MIN) made wrapping_sub underflow negative
+                        // on every frame, so the throttle dropped 100% of frames.
+                        // saturating_sub(ts, i64::MIN) saturates high, so the
+                        // first frame always passes; later deltas are normal.
+                        if ts.saturating_sub(last) >= min_interval {
                             last_ts_cb.store(ts, Ordering::Relaxed);
                             let n = frames_cb.fetch_add(1, Ordering::Relaxed) + 1;
                             if let Err(e) = process_frame(&frame, &converter, &tx, ts, dur_100ns) {
@@ -168,6 +176,10 @@ impl Drop for MonitorCapture {
         );
     }
 }
+
+/// Logs the first FrameArrived callback once, to confirm WGC is delivering
+/// frames at all (vs. the throttle silently dropping them).
+static FIRST_ARRIVAL: AtomicBool = AtomicBool::new(true);
 
 /// Logs each step of the *first* processed frame exactly once, so if the
 /// pipeline crashes on frame 1 the log shows the last step that succeeded.

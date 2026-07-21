@@ -291,21 +291,41 @@ unsafe fn make_pcm_sample(pcm: &[u8], pts_100ns: i64, dur_100ns: i64) -> Result<
 }
 
 /// Drain all available AAC output frames into the ring.
+///
+/// The AAC encoder is a **synchronous** MFT that does NOT allocate its own
+/// output samples (unlike the async NVENC video MFT). We must hand it an output
+/// sample + buffer sized per `GetOutputStreamInfo`; passing a null sample is
+/// what caused the 0xC0000005 access violation on the first mic buffer.
 unsafe fn drain_aac(encoder: &IMFTransform, ring: &Arc<Mutex<RingBuffer>>, count: &mut u64) {
+    let out_size = match encoder.GetOutputStreamInfo(0) {
+        Ok(info) => info.cbSize.max(1),
+        Err(_) => return,
+    };
     loop {
+        // Fresh caller-allocated output sample for the MFT to write into.
+        let (buffer, sample) = match (MFCreateMemoryBuffer(out_size), MFCreateSample()) {
+            (Ok(b), Ok(s)) => (b, s),
+            _ => break,
+        };
+        if sample.AddBuffer(&buffer).is_err() {
+            break;
+        }
+
         let mut out = [MFT_OUTPUT_DATA_BUFFER {
             dwStreamID: 0,
-            pSample: ManuallyDrop::new(None),
+            pSample: ManuallyDrop::new(Some(sample)),
             dwStatus: 0,
             pEvents: ManuallyDrop::new(None),
         }];
         let mut status = 0u32;
-        if encoder.ProcessOutput(0, &mut out, &mut status).is_err() {
-            break; // NEED_MORE_INPUT etc.
-        }
-        let sample = ManuallyDrop::take(&mut out[0].pSample);
+        let hr = encoder.ProcessOutput(0, &mut out, &mut status);
+        // Reclaim the sample we passed in (the MFT filled its buffer in place).
+        let produced = ManuallyDrop::take(&mut out[0].pSample);
         let _ = ManuallyDrop::take(&mut out[0].pEvents);
-        let Some(sample) = sample else { break };
+        if hr.is_err() {
+            break; // MF_E_TRANSFORM_NEED_MORE_INPUT etc.
+        }
+        let Some(sample) = produced else { break };
         if let Ok(frame) = read_encoded(&sample) {
             if let Ok(mut r) = ring.lock() {
                 r.push(frame);
