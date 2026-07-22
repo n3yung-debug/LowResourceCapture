@@ -69,6 +69,38 @@ pub fn filmstrip_data_uri(input: &str, dur: f64, tiles: u32) -> Option<String> {
     Some(format!("data:image/jpeg;base64,{b64}"))
 }
 
+/// A lightweight, playable H.264 + AAC copy of the whole clip as a
+/// `data:video/mp4` URI, for the in-app preview `<video>`. Chromium can't
+/// decode HEVC, so we transcode; downscaled to 480p30 to keep the data URI
+/// small and quick. Preview quality only — the trim always re-encodes from the
+/// original at full resolution.
+pub fn preview_data_uri(input: &str) -> Option<String> {
+    let ff = ffmpeg()?;
+    let tmp = std::env::temp_dir().join(format!("lrc_preview_{}.mp4", std::process::id()));
+    let ok = Command::new(ff)
+        .creation_flags(CREATE_NO_WINDOW)
+        .args([
+            "-hide_banner", "-y", "-i", input,
+            "-vf", "scale=-2:480",
+            "-r", "30",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+        ])
+        .arg(&tmp)
+        .status()
+        .ok()?
+        .success();
+    if !ok {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    let bytes = std::fs::read(&tmp).ok()?;
+    let _ = std::fs::remove_file(&tmp);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Some(format!("data:video/mp4;base64,{b64}"))
+}
+
 /// Frame-accurate trim, re-encoded to H.264 + AAC so the result is exact and
 /// plays/previews everywhere. `start` and `dur` are seconds.
 pub fn trim(input: &str, start: f64, dur: f64, out: &Path) -> Result<()> {

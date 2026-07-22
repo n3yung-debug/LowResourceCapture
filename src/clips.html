@@ -48,7 +48,15 @@
   .trim-card { background:var(--panel); border:1px solid var(--border); border-radius:14px;
     width:min(760px,100%); max-height:100%; overflow:auto; padding:18px 20px; }
   .trim-card h2 { margin:0 0 2px; font-size:15px; font-weight:600; }
-  .trim-card .fn { color:var(--muted); font-size:12px; word-break:break-all; margin-bottom:16px; }
+  .trim-card .fn { color:var(--muted); font-size:12px; word-break:break-all; margin-bottom:14px; }
+  /* Preview video */
+  .pv-wrap { position:relative; background:#000; border:1px solid var(--border); border-radius:8px;
+    overflow:hidden; margin-bottom:10px; display:flex; align-items:center; justify-content:center;
+    min-height:170px; max-height:340px; }
+  #pv { width:100%; max-height:340px; display:none; background:#000; }
+  .pv-hint { color:var(--muted); font-size:12px; padding:26px; text-align:center; }
+  .pv-controls { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+  .btn.sm { padding:6px 12px; font-size:12px; }
   /* Timeline */
   .tl-wrap { user-select:none; }
   .tl { position:relative; height:74px; border:1px solid var(--border); border-radius:8px;
@@ -61,6 +69,8 @@
     display:flex; align-items:center; justify-content:center; }
   .tl .handle::after { content:""; width:4px; height:60%; background:var(--accent2); border-radius:2px;
     box-shadow:0 0 0 2px rgba(10,11,14,0.55); }
+  .tl .playhead { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:#fff;
+    box-shadow:0 0 0 1px rgba(0,0,0,0.55); pointer-events:none; display:none; }
   .tl.loading { display:flex; align-items:center; justify-content:center; color:var(--muted); }
   .tl-times { display:flex; justify-content:space-between; color:var(--muted); font-size:12px;
     margin-top:8px; font-variant-numeric:tabular-nums; }
@@ -95,6 +105,15 @@
     <div class="trim-card">
       <h2>Trim clip</h2>
       <div class="fn" id="trimName"></div>
+      <div class="pv-wrap">
+        <video id="pv" playsinline controls></video>
+        <div class="pv-hint" id="pvHint">Preparing preview…</div>
+      </div>
+      <div class="pv-controls" id="pvControls" style="display:none">
+        <button class="btn sm" id="pvPlaySel">▶ Play selection</button>
+        <button class="btn sm" id="setIn">Set In to playhead</button>
+        <button class="btn sm" id="setOut">Set Out to playhead</button>
+      </div>
       <div class="tl-wrap">
         <div class="tl loading" id="tl">Loading timeline…</div>
         <div class="tl-times">
@@ -190,24 +209,40 @@
   const shadeR = document.createElement('div'); shadeR.className = 'shade';
   const hIn = document.createElement('div'); hIn.className = 'handle in';
   const hOut = document.createElement('div'); hOut.className = 'handle out';
+  const playheadEl = document.createElement('div'); playheadEl.className = 'playhead';
   const statusEl = document.getElementById('trimStatus');
   const saveBtn = document.getElementById('trimSave');
   const cancelBtn = document.getElementById('trimCancel');
+  const pv = document.getElementById('pv');
+  const pvHint = document.getElementById('pvHint');
+  const pvControls = document.getElementById('pvControls');
+  let selStop = null; // when playing the selection, time at which to auto-pause
 
-  let T = { clip:null, dur:0, inS:0, outS:0, ready:false, saving:false };
+  let T = { clip:null, dur:0, inS:0, outS:0, ready:false, saving:false, hasPreview:false };
 
   function openTrim(c) {
-    T = { clip:c, dur:0, inS:0, outS:0, ready:false, saving:false };
+    T = { clip:c, dur:0, inS:0, outS:0, ready:false, saving:false, hasPreview:false };
+    selStop = null;
     document.getElementById('trimName').textContent = c.name;
     tl.className = 'tl loading';
     tl.style.backgroundImage = 'none';
     tl.textContent = 'Loading timeline…';
+    // Reset preview.
+    pv.pause(); pv.removeAttribute('src'); pv.load();
+    pv.style.display = 'none';
+    pvControls.style.display = 'none';
+    pvHint.style.display = 'block';
+    pvHint.textContent = 'Preparing preview…';
     setStatus('', '');
     saveBtn.disabled = true;
     trimEl.classList.add('on');
     send({ cmd:'trimOpen', path:c.path });
   }
-  function closeTrim() { trimEl.classList.remove('on'); T.clip = null; }
+  function closeTrim() {
+    trimEl.classList.remove('on');
+    T.clip = null;
+    pv.pause(); pv.removeAttribute('src'); pv.load();
+  }
 
   function setStatus(msg, kind) {
     statusEl.textContent = msg || '';
@@ -226,6 +261,7 @@
     if (info.strip) tl.style.backgroundImage = `url("${info.strip}")`;
     tl.appendChild(shadeL); tl.appendChild(shadeR);
     tl.appendChild(selEl); tl.appendChild(hIn); tl.appendChild(hOut);
+    tl.appendChild(playheadEl);
     saveBtn.disabled = false;
     layout();
   };
@@ -233,6 +269,19 @@
     tl.className = 'tl loading';
     tl.textContent = msg || 'Could not read this clip.';
     setStatus(msg || 'Could not read this clip.', 'err');
+  };
+  // The playable H.264 preview arrived (a data: URI).
+  window.previewReady = function(uri) {
+    if (!T.clip || !uri) return;
+    pv.src = uri;
+    pv.style.display = 'block';
+    pvHint.style.display = 'none';
+    pvControls.style.display = 'flex';
+    T.hasPreview = true;
+  };
+  window.previewError = function(msg) {
+    pvHint.textContent = 'Preview unavailable — drag the handles on the filmstrip to set In/Out.';
+    if (msg) console.warn('preview:', msg);
   };
   window.trimDone = function(ok, detail) {
     T.saving = false;
@@ -258,11 +307,22 @@
     selEl.style.left = xi + 'px'; selEl.style.width = (xo - xi) + 'px';
     hIn.style.left = xi + 'px';
     hOut.style.left = xo + 'px';
+    if (T.hasPreview) playheadEl.style.left = (Math.min(pv.currentTime, T.dur) / T.dur) * w + 'px';
     document.getElementById('tIn').textContent = fmtTime(T.inS);
     document.getElementById('tOut').textContent = fmtTime(T.outS);
     document.getElementById('tLen').textContent = fmtTime(Math.max(0, T.outS - T.inS));
   }
   window.addEventListener('resize', layout);
+
+  // Keep the timeline playhead in sync with the preview, and stop at the out
+  // point when playing just the selection.
+  pv.addEventListener('timeupdate', () => {
+    if (T.dur > 0) {
+      playheadEl.style.display = 'block';
+      playheadEl.style.left = (Math.min(pv.currentTime, T.dur) / T.dur) * tl.clientWidth + 'px';
+    }
+    if (selStop != null && pv.currentTime >= selStop) { pv.pause(); selStop = null; }
+  });
 
   // Dragging the in/out handles.
   let drag = null; // 'in' | 'out'
@@ -298,14 +358,39 @@
   }
   hIn.addEventListener('pointerdown', startDrag('in'));
   hOut.addEventListener('pointerdown', startDrag('out'));
-  // Click on the strip moves the nearest handle there.
+  // Clicking the strip: with a preview loaded, seek there; otherwise move the
+  // nearest handle to that point.
   tl.addEventListener('pointerdown', (e) => {
     if (!T.ready || e.target === hIn || e.target === hOut) return;
     const t = xToTime(e.clientX);
-    const which = Math.abs(t - T.inS) <= Math.abs(t - T.outS) ? 'in' : 'out';
-    startDrag(which)(e);
-    onMove(e);
+    if (T.hasPreview) {
+      selStop = null;
+      pv.currentTime = Math.min(Math.max(0, t), T.dur);
+    } else {
+      const which = Math.abs(t - T.inS) <= Math.abs(t - T.outS) ? 'in' : 'out';
+      startDrag(which)(e);
+      onMove(e);
+    }
   });
+
+  // Preview-driven controls: play just the selection, or mark In/Out at the
+  // current playhead.
+  document.getElementById('pvPlaySel').onclick = () => {
+    if (!T.hasPreview) return;
+    pv.currentTime = T.inS;
+    selStop = T.outS;
+    pv.play();
+  };
+  document.getElementById('setIn').onclick = () => {
+    if (!T.ready) return;
+    T.inS = Math.max(0, Math.min(pv.currentTime, T.outS - 0.1));
+    layout();
+  };
+  document.getElementById('setOut').onclick = () => {
+    if (!T.ready) return;
+    T.outS = Math.min(T.dur, Math.max(pv.currentTime, T.inS + 0.1));
+    layout();
+  };
 
   cancelBtn.onclick = () => { if (!T.saving) closeTrim(); };
   saveBtn.onclick = () => {

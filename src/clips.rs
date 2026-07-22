@@ -125,18 +125,32 @@ fn handle_ipc(msg: &str, output_dir: &Path, proxy: &EventLoopProxy<UserEvent>) -
                 }
             }
         }
-        // Build the trim timeline (duration + filmstrip) off-thread.
+        // Build the trim timeline (duration + filmstrip), then a playable
+        // preview — both off-thread. The timeline lands first so scrubbing works
+        // immediately; the H.264 preview follows a beat later.
         "trimOpen" => {
             let p = proxy.clone();
             let path = m.path.clone();
             std::thread::spawn(move || {
-                let js = match crate::ffmpeg::duration_secs(&path) {
-                    Some(dur) => {
-                        let strip = crate::ffmpeg::filmstrip_data_uri(&path, dur, 12)
-                            .unwrap_or_default();
-                        format!("window.trimReady({{duration:{dur},strip:{}}})", js_str(&strip))
+                let dur = match crate::ffmpeg::duration_secs(&path) {
+                    Some(d) => d,
+                    None => {
+                        let _ = p.send_event(UserEvent::Eval(
+                            "window.trimError('Could not read this clip.')".to_string(),
+                        ));
+                        return;
                     }
-                    None => "window.trimError('Could not read this clip.')".to_string(),
+                };
+                let strip = crate::ffmpeg::filmstrip_data_uri(&path, dur, 12).unwrap_or_default();
+                let _ = p.send_event(UserEvent::Eval(format!(
+                    "window.trimReady({{duration:{dur},strip:{}}})",
+                    js_str(&strip)
+                )));
+                // Chromium can't decode HEVC, so transcode a light H.264 copy
+                // for the in-app <video>.
+                let js = match crate::ffmpeg::preview_data_uri(&path) {
+                    Some(uri) => format!("window.previewReady({})", js_str(&uri)),
+                    None => "window.previewError('Preview could not be generated.')".to_string(),
                 };
                 let _ = p.send_event(UserEvent::Eval(js));
             });
