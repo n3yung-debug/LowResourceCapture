@@ -37,8 +37,72 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
-use crate::config::AudioMode;
+use crate::config::{AudioMode, MicProcessing};
 use crate::ringbuffer::{EncodedFrame, RingBuffer};
+
+/// Mic DSP: volume + noise gate, applied in place to an interleaved f32 block.
+/// The gate is a per-packet peak gate with fast attack, a short hold, and a
+/// gradual release — enough to drop breathing/idle hiss between words.
+struct MicDsp {
+    volume: f32,
+    gate: bool,
+    thresh: f32, // linear amplitude threshold
+    gain: f32,   // current gate gain, 0..=1
+    hold: u32,   // packets left to hold the gate open
+}
+
+impl MicDsp {
+    fn new(p: &MicProcessing) -> Self {
+        Self {
+            volume: p.volume.max(0.0),
+            gate: p.noise_gate,
+            thresh: 10f32.powf(p.gate_threshold_db / 20.0),
+            gain: 0.0,
+            hold: 0,
+        }
+    }
+
+    fn process(&mut self, block: &mut [f32]) {
+        if self.gate {
+            const HOLD_PACKETS: u32 = 12; // ~120 ms hold so word-ends aren't clipped
+            const RELEASE: f32 = 0.08;
+            let peak = block.iter().fold(0f32, |m, s| m.max(s.abs()));
+            if peak >= self.thresh {
+                self.gain = 1.0; // fast attack
+                self.hold = HOLD_PACKETS;
+            } else if self.hold > 0 {
+                self.hold -= 1;
+            } else {
+                self.gain = (self.gain - RELEASE).max(0.0);
+            }
+            if self.gain < 0.999 {
+                for s in block.iter_mut() {
+                    *s *= self.gain;
+                }
+            }
+        }
+        if (self.volume - 1.0).abs() > 1e-3 {
+            for s in block.iter_mut() {
+                *s *= self.volume;
+            }
+        }
+    }
+}
+
+/// Downmix an interleaved f32 block (`sc` channels) to interleaved 16-bit PCM
+/// bytes (`oc` channels).
+fn downmix_i16(block: &[f32], sc: usize, oc: usize) -> Vec<u8> {
+    let frames = block.len() / sc.max(1);
+    let mut out = Vec::with_capacity(frames * oc * 2);
+    for f in 0..frames {
+        for c in 0..oc {
+            let s = block[f * sc + c.min(sc - 1)];
+            let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    out
+}
 
 const MF_VERSION: u32 = (0x0002 << 16) | 0x0070;
 const MFSTARTUP_FULL: u32 = 0;
@@ -84,6 +148,7 @@ impl AudioCapture {
     /// no-op.
     pub fn start(
         mode: AudioMode,
+        mic_proc: MicProcessing,
         game_ring: Arc<Mutex<RingBuffer>>,
         mic_ring: Arc<Mutex<RingBuffer>>,
     ) -> Result<AudioCapture> {
@@ -99,20 +164,26 @@ impl AudioCapture {
         }
         if matches!(mode, AudioMode::GameAndMicMixed) {
             // One worker mixes game + mic into a single AAC track (game_ring).
-            workers.push(spawn_mixed_worker("audio-mixed", game_ring, game_type.clone()));
+            workers.push(spawn_mixed_worker(
+                "audio-mixed",
+                game_ring,
+                game_type.clone(),
+                mic_proc,
+            ));
             return Ok(AudioCapture {
                 workers,
                 game_type,
                 mic_type,
             });
         }
-        // Game/desktop audio via render-endpoint loopback.
+        // Game/desktop audio via render-endpoint loopback (no mic DSP).
         workers.push(spawn_worker(
             "audio-game",
             game_ring,
             eRender,
             true,
             game_type.clone(),
+            None,
         ));
         // Microphone (no loopback) when the mode wants it (separate track).
         if matches!(mode, AudioMode::GameAndMicSeparate) {
@@ -122,6 +193,7 @@ impl AudioCapture {
                 eCapture,
                 false,
                 mic_type.clone(),
+                Some(mic_proc),
             ));
         }
         Ok(AudioCapture {
@@ -161,13 +233,14 @@ fn spawn_worker(
     dataflow: EDataFlow,
     loopback: bool,
     out_type: SharedAudioType,
+    mic_proc: Option<MicProcessing>,
 ) -> Worker {
     let shutdown = Arc::new(AtomicBool::new(false));
     let sd = shutdown.clone();
     let thread = std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
-            if let Err(e) = capture_loop(&sd, &ring, dataflow, loopback, &out_type) {
+            if let Err(e) = capture_loop(&sd, &ring, dataflow, loopback, &out_type, mic_proc) {
                 log::error!("audio capture failed: {e:#}");
             }
         })
@@ -179,13 +252,18 @@ fn spawn_worker(
 }
 
 /// Spawn the worker that mixes game loopback + mic into one AAC track.
-fn spawn_mixed_worker(name: &str, ring: Arc<Mutex<RingBuffer>>, out_type: SharedAudioType) -> Worker {
+fn spawn_mixed_worker(
+    name: &str,
+    ring: Arc<Mutex<RingBuffer>>,
+    out_type: SharedAudioType,
+    mic_proc: MicProcessing,
+) -> Worker {
     let shutdown = Arc::new(AtomicBool::new(false));
     let sd = shutdown.clone();
     let thread = std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
-            if let Err(e) = capture_loop_mixed(&sd, &ring, &out_type) {
+            if let Err(e) = capture_loop_mixed(&sd, &ring, &out_type, mic_proc) {
                 log::error!("mixed audio capture failed: {e:#}");
             }
         })
@@ -205,6 +283,7 @@ fn capture_loop_mixed(
     shutdown: &AtomicBool,
     ring: &Arc<Mutex<RingBuffer>>,
     out_type: &SharedAudioType,
+    mic_proc: MicProcessing,
 ) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -279,6 +358,7 @@ fn capture_loop_mixed(
         let silent_flag = AUDCLNT_BUFFERFLAGS_SILENT.0 as u32;
         let fifo_cap = rate as usize * sc; // ~1s of mic
         let mut mic_fifo: VecDeque<f32> = VecDeque::new();
+        let mut mic_dsp = MicDsp::new(&mic_proc);
         let mut total_frames: i64 = 0;
         let mut aac_frames: u64 = 0;
         let mut last = Instant::now();
@@ -329,16 +409,21 @@ fn capture_loop_mixed(
                     &[]
                 };
 
+                // Pull this packet's worth of mic from the FIFO, then run mic
+                // DSP (volume + noise gate) before summing with the game audio.
+                let mut mic_block = vec![0f32; frames * sc];
+                for s in mic_block.iter_mut() {
+                    *s = mic_fifo.pop_front().unwrap_or(0.0);
+                }
+                mic_dsp.process(&mut mic_block);
+
                 let mut pcm = Vec::with_capacity(frames * oc * 2);
                 for f in 0..frames {
-                    let mut mic_frame = [0f32; 8];
-                    for m in mic_frame.iter_mut().take(sc.min(8)) {
-                        *m = mic_fifo.pop_front().unwrap_or(0.0);
-                    }
                     for c in 0..oc {
                         let idx = c.min(sc - 1);
                         let g = if game_s.is_empty() { 0.0 } else { game_s[f * sc + idx] };
-                        let mixed = (g + mic_frame[idx.min(7)]).clamp(-1.0, 1.0);
+                        let m = mic_block[f * sc + idx];
+                        let mixed = (g + m).clamp(-1.0, 1.0);
                         let v = (mixed * 32767.0) as i16;
                         pcm.extend_from_slice(&v.to_le_bytes());
                     }
@@ -386,6 +471,7 @@ fn capture_loop(
     dataflow: EDataFlow,
     loopback: bool,
     out_type: &SharedAudioType,
+    mic_proc: Option<MicProcessing>,
 ) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -443,6 +529,8 @@ fn capture_loop(
         let mut total_frames: i64 = 0;
         let mut aac_frames: u64 = 0;
         let mut last = Instant::now();
+        // Mic DSP (volume + gate) for the separate-mic worker; None for game.
+        let mut mic_dsp = mic_proc.map(|p| MicDsp::new(&p));
         // First-buffer markers (per worker) so an audio-path crash is pinpointed.
         let tag = if loopback { "audio-game" } else { "audio-mic" };
         let (mut lg_buf, mut lg_pcm, mut lg_in) = (false, false, false);
@@ -471,7 +559,15 @@ fn capture_loop(
                 }
                 once!(lg_buf, "{tag}: first buffer ({nframes} frames, {src_bits}-bit src)");
 
-                let pcm = to_i16_pcm(pdata, nframes, src_channels, src_bits, channels);
+                let pcm = match mic_dsp.as_mut() {
+                    Some(dsp) if src_bits == 32 => {
+                        let n = nframes as usize * src_channels as usize;
+                        let mut block = std::slice::from_raw_parts(pdata as *const f32, n).to_vec();
+                        dsp.process(&mut block);
+                        downmix_i16(&block, src_channels as usize, channels as usize)
+                    }
+                    _ => to_i16_pcm(pdata, nframes, src_channels, src_bits, channels),
+                };
                 once!(lg_pcm, "{tag}: first PCM converted ({} bytes)", pcm.len());
                 // QPC-based pts (shared clock with video); fall back to sample
                 // counting only if the device didn't provide a QPC position.

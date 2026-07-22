@@ -36,6 +36,9 @@ struct SaveMsg {
     presets: Vec<PresetIn>,
     mic_enabled: Option<bool>,
     mix_audio: Option<bool>,
+    mic_volume: Option<f32>,
+    mic_noise_gate: Option<bool>,
+    mic_gate_db: Option<f32>,
     run_at_startup: Option<bool>,
     output_dir: Option<String>,
     codec: Option<String>,
@@ -156,6 +159,15 @@ fn apply_and_save(config: &mut Config, m: SaveMsg) {
         } else {
             AudioMode::GameAndMicSeparate
         };
+    }
+    if let Some(v) = m.mic_volume {
+        config.mic.volume = v.clamp(0.0, 4.0);
+    }
+    if let Some(g) = m.mic_noise_gate {
+        config.mic.noise_gate = g;
+    }
+    if let Some(db) = m.mic_gate_db {
+        config.mic.gate_threshold_db = db.clamp(-80.0, 0.0);
     }
     if let Some(startup) = m.run_at_startup {
         if let Err(e) = crate::startup::set_enabled(startup) {

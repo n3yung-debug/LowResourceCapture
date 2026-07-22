@@ -49,7 +49,33 @@ pub enum AudioMode {
 
 impl Default for AudioMode {
     fn default() -> Self {
-        AudioMode::GameAndMicSeparate
+        // Mixed is validated on-device and is what most people want (everything
+        // you heard + your mic on one playable track).
+        AudioMode::GameAndMicMixed
+    }
+}
+
+/// Microphone processing applied before the mic is encoded/mixed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MicProcessing {
+    /// Gain multiplier for the mic. 1.0 = 100%.
+    pub volume: f32,
+    /// Noise gate: silence the mic when it's below the threshold (kills
+    /// breathing / idle hiss between words).
+    pub noise_gate: bool,
+    /// Gate threshold in dBFS. Signal below this is gated. More negative =
+    /// only very quiet sounds are cut; closer to 0 = more aggressive.
+    pub gate_threshold_db: f32,
+}
+
+impl Default for MicProcessing {
+    fn default() -> Self {
+        Self {
+            volume: 1.0,
+            noise_gate: true,
+            gate_threshold_db: -45.0,
+        }
     }
 }
 
@@ -103,6 +129,8 @@ pub struct Config {
     pub encoder: EncoderConfig,
     pub buffer: BufferConfig,
     pub audio: AudioMode,
+    /// Microphone volume + noise gate.
+    pub mic: MicProcessing,
     /// If true, only capture when a detected game is in the foreground.
     /// If false, capture the foreground window whenever the app is running.
     pub auto_detect_games: bool,
@@ -125,6 +153,7 @@ impl Default for Config {
             encoder: EncoderConfig::default(),
             buffer: BufferConfig::default(),
             audio: AudioMode::default(),
+            mic: MicProcessing::default(),
             auto_detect_games: true,
             game_allowlist: Vec::new(),
             game_blocklist: Vec::new(),

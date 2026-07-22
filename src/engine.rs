@@ -218,7 +218,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                     }
                     if with_audio && audio.is_none() {
                         audio =
-                            AudioCapture::start(config.audio, audio_ring.clone(), mic_ring.clone())
+                            AudioCapture::start(config.audio, config.mic, audio_ring.clone(), mic_ring.clone())
                                 .ok();
                     }
                 }
@@ -297,8 +297,8 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
             }
             EngineCommand::ReloadConfig(new_cfg) => {
                 log::info!("engine reloading config");
-                // Detect an audio-mode change BEFORE we overwrite config.
-                let audio_changed = new_cfg.audio != config.audio;
+                // Detect an audio-mode or mic-DSP change BEFORE overwriting config.
+                let audio_changed = new_cfg.audio != config.audio || new_cfg.mic != config.mic;
                 // Keep the video ring as-is so changing settings doesn't wipe
                 // the last N seconds you could still want to clip. (Buffer-size
                 // changes take effect on next launch.)
@@ -313,7 +313,7 @@ fn engine_loop(mut config: Config, rx: Receiver<EngineCommand>) {
                         RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
                     *mic_ring.lock().unwrap() =
                         RingBuffer::new(config.buffer.max_seconds, config.buffer.max_ram_mb);
-                    audio = AudioCapture::start(config.audio, audio_ring.clone(), mic_ring.clone())
+                    audio = AudioCapture::start(config.audio, config.mic, audio_ring.clone(), mic_ring.clone())
                         .ok();
                     log::info!("audio restarted for new mode: {:?}", config.audio);
                 }

@@ -40,6 +40,7 @@
     border-radius: 7px; padding: 7px 9px; width: 100%;
   }
   input:focus, select:focus { outline: none; border-color: var(--accent2); }
+  input[type=range] { width: 100%; padding: 0; border: none; background: transparent; accent-color: var(--accent); }
   .hotkey-btn { cursor: pointer; text-align: center; white-space: nowrap;
     background: var(--panel2); font-variant: small-caps; }
   .hotkey-btn.capturing { border-color: var(--accent2); color: var(--accent2); }
@@ -134,6 +135,26 @@
           <span class="txt txt-on">ON</span>
           <span class="txt txt-off">OFF</span>
         </button>
+      </div>
+      <div class="field" style="margin-top:14px;">
+        <label>Mic volume — <span id="micVolVal">100</span>%</label>
+        <input type="range" id="micVol" min="0" max="200" step="5" value="100">
+      </div>
+      <div class="toggle-row" style="margin-top:8px;">
+        <div>
+          <div class="toggle-label">Noise gate</div>
+          <div class="hint">Silences the mic between words (cuts breathing / idle hiss).</div>
+        </div>
+        <button class="toggle" id="gateToggle" role="switch" aria-checked="true" title="Toggle noise gate">
+          <span class="knob"></span>
+          <span class="txt txt-on">ON</span>
+          <span class="txt txt-off">OFF</span>
+        </button>
+      </div>
+      <div class="field" style="margin-top:10px;">
+        <label>Gate threshold — <span id="gateDbVal">-45</span> dB</label>
+        <input type="range" id="gateDb" min="-70" max="-20" step="1" value="-45">
+        <div class="hint">Closer to 0 cuts more (raise if breathing still comes through).</div>
       </div>
     </div>
 
@@ -304,6 +325,24 @@
   initToggle(mixToggle);
   mixToggle.setAttribute('aria-checked', (cfg.audio || '').toLowerCase() === 'gameandmicmixed' ? 'true' : 'false');
 
+  // Mic volume + noise gate.
+  const mic = cfg.mic || {};
+  const micVol = document.getElementById('micVol');
+  const micVolVal = document.getElementById('micVolVal');
+  micVol.value = Math.round((mic.volume != null ? mic.volume : 1) * 100);
+  micVolVal.textContent = micVol.value;
+  micVol.addEventListener('input', () => micVolVal.textContent = micVol.value);
+
+  const gateToggle = document.getElementById('gateToggle');
+  initToggle(gateToggle);
+  gateToggle.setAttribute('aria-checked', mic.noise_gate === false ? 'false' : 'true');
+
+  const gateDb = document.getElementById('gateDb');
+  const gateDbVal = document.getElementById('gateDbVal');
+  gateDb.value = Math.round(mic.gate_threshold_db != null ? mic.gate_threshold_db : -45);
+  gateDbVal.textContent = gateDb.value;
+  gateDb.addEventListener('input', () => gateDbVal.textContent = gateDb.value);
+
   const startupToggle = document.getElementById('startupToggle');
   initToggle(startupToggle);
   startupToggle.setAttribute('aria-checked', window.__STARTUP__ ? 'true' : 'false');
@@ -328,6 +367,9 @@
       presets,
       mic_enabled: micToggle.getAttribute('aria-checked') === 'true',
       mix_audio: mixToggle.getAttribute('aria-checked') === 'true',
+      mic_volume: (parseInt(micVol.value) || 100) / 100,
+      mic_noise_gate: gateToggle.getAttribute('aria-checked') === 'true',
+      mic_gate_db: parseInt(gateDb.value) || -45,
       run_at_startup: startupToggle.getAttribute('aria-checked') === 'true',
       output_dir: document.getElementById('outputDir').value.trim(),
       codec: document.getElementById('codec').value,
