@@ -1,6 +1,6 @@
 [package]
 name = "lowresourcecapture"
-version = "0.1.19"
+version = "0.1.20"
 edition = "2021"
 description = "Low-overhead retroactive game clip recorder for Windows (NVENC/HEVC, ring-buffer instant replay)"
 license = "MIT"

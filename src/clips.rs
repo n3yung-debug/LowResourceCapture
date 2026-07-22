@@ -146,11 +146,47 @@ fn handle_ipc(msg: &str, output_dir: &Path, proxy: &EventLoopProxy<UserEvent>) -
                     "window.trimReady({{duration:{dur},strip:{}}})",
                     js_str(&strip)
                 )));
-                // Chromium can't decode HEVC, so transcode a light H.264 copy
-                // for the in-app <video>.
-                let js = match crate::ffmpeg::preview_data_uri(&path) {
+                // Chromium can't decode HEVC, so transcode a light 480p H.264
+                // copy for the trim scrubber.
+                let js = match crate::ffmpeg::preview_data_uri(&path, 480, 30) {
                     Some(uri) => format!("window.previewReady({})", js_str(&uri)),
                     None => "window.previewError('Preview could not be generated.')".to_string(),
+                };
+                let _ = p.send_event(UserEvent::Eval(js));
+            });
+        }
+        // In-app player: transcode a nicer 720p H.264 copy and hand it to the
+        // player <video>.
+        "playPreview" => {
+            let p = proxy.clone();
+            let path = m.path.clone();
+            std::thread::spawn(move || {
+                let js = match crate::ffmpeg::preview_data_uri(&path, 720, 26) {
+                    Some(uri) => format!("window.playerReady({})", js_str(&uri)),
+                    None => "window.playerError('Could not build a preview for this clip.')".to_string(),
+                };
+                let _ = p.send_event(UserEvent::Eval(js));
+            });
+        }
+        // Full-quality playback in the OS default player (from the player window).
+        "openExternal" => open_default(&m.path),
+        // Split the clip at the playhead into two files (off-thread).
+        "split" => {
+            let p = proxy.clone();
+            let path = m.path.clone();
+            let at = m.start;
+            std::thread::spawn(move || {
+                let (p1, p2) = split_out_paths(&path);
+                let js = match crate::ffmpeg::split(&path, at, &p1, &p2) {
+                    Ok(()) => format!(
+                        "window.splitDone(true,{})",
+                        js_str(&format!(
+                            "{} + {}",
+                            p1.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                            p2.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                        ))
+                    ),
+                    Err(e) => format!("window.splitDone(false,{})", js_str(&format!("{e:#}"))),
                 };
                 let _ = p.send_event(UserEvent::Eval(js));
             });
@@ -191,6 +227,25 @@ fn trim_out_path(input: &str) -> PathBuf {
         n += 1;
     }
     out
+}
+
+/// `<dir>/<stem>-part1.mp4` and `-part2.mp4`, sharing a numeric suffix if
+/// needed so the pair never overwrites existing files.
+fn split_out_paths(input: &str) -> (PathBuf, PathBuf) {
+    let p = Path::new(input);
+    let dir = p.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
+    let mut suffix = String::new();
+    let mut n = 2;
+    loop {
+        let p1 = dir.join(format!("{stem}-part1{suffix}.mp4"));
+        let p2 = dir.join(format!("{stem}-part2{suffix}.mp4"));
+        if !p1.exists() && !p2.exists() {
+            return (p1, p2);
+        }
+        suffix = format!("_{n}");
+        n += 1;
+    }
 }
 
 /// JSON-encode a string so it's safe to embed in a `evaluate_script` call.

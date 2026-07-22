@@ -70,20 +70,23 @@ pub fn filmstrip_data_uri(input: &str, dur: f64, tiles: u32) -> Option<String> {
 }
 
 /// A lightweight, playable H.264 + AAC copy of the whole clip as a
-/// `data:video/mp4` URI, for the in-app preview `<video>`. Chromium can't
-/// decode HEVC, so we transcode; downscaled to 480p30 to keep the data URI
-/// small and quick. Preview quality only — the trim always re-encodes from the
-/// original at full resolution.
-pub fn preview_data_uri(input: &str) -> Option<String> {
+/// `data:video/mp4` URI, for an in-app `<video>`. Chromium can't decode HEVC,
+/// so we transcode; downscaled to `height` px and capped at 30fps to keep the
+/// data URI manageable. Playback quality only — trim/split always re-encode
+/// from the original at full resolution.
+///
+/// The trim scrubber uses a small 480p copy (fast, tiny); the Play window uses
+/// a nicer 720p copy.
+pub fn preview_data_uri(input: &str, height: u32, crf: u32) -> Option<String> {
     let ff = ffmpeg()?;
     let tmp = std::env::temp_dir().join(format!("lrc_preview_{}.mp4", std::process::id()));
     let ok = Command::new(ff)
         .creation_flags(CREATE_NO_WINDOW)
         .args([
             "-hide_banner", "-y", "-i", input,
-            "-vf", "scale=-2:480",
+            "-vf", &format!("scale=-2:{height}"),
             "-r", "30",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", &crf.to_string(),
             "-c:a", "aac",
             "-movflags", "+faststart",
         ])
@@ -101,37 +104,37 @@ pub fn preview_data_uri(input: &str) -> Option<String> {
     Some(format!("data:video/mp4;base64,{b64}"))
 }
 
-/// Frame-accurate trim, re-encoded to H.264 + AAC so the result is exact and
-/// plays/previews everywhere. `start` and `dur` are seconds.
-pub fn trim(input: &str, start: f64, dur: f64, out: &Path) -> Result<()> {
+/// Re-encode a range of `input` to a frame-accurate H.264 + AAC file at `out`.
+/// `dur` = `None` means "to the end of the clip". Shared by trim and split.
+fn encode(input: &str, start: f64, dur: Option<f64>, out: &Path) -> Result<()> {
     let ff = ffmpeg().context("ffmpeg.exe not found next to the app")?;
-    let status = Command::new(ff)
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "-hide_banner",
-            "-y",
-            "-ss",
-            &format!("{start}"),
-            "-i",
-            input,
-            "-t",
-            &format!("{dur}"),
-            "-c:v",
-            "libx264",
-            "-crf",
-            "18",
-            "-preset",
-            "veryfast",
-            "-c:a",
-            "aac",
-            "-movflags",
-            "+faststart",
-        ])
-        .arg(out)
-        .status()
-        .context("running ffmpeg trim")?;
+    let mut cmd = Command::new(ff);
+    cmd.creation_flags(CREATE_NO_WINDOW)
+        .args(["-hide_banner", "-y", "-ss", &format!("{start}"), "-i", input]);
+    if let Some(d) = dur {
+        cmd.args(["-t", &format!("{d}")]);
+    }
+    cmd.args([
+        "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
+        "-c:a", "aac", "-movflags", "+faststart",
+    ]);
+    let status = cmd.arg(out).status().context("running ffmpeg")?;
     if !status.success() {
         anyhow::bail!("ffmpeg exited with {status}");
     }
+    Ok(())
+}
+
+/// Frame-accurate trim, re-encoded to H.264 + AAC so the result is exact and
+/// plays/previews everywhere. `start` and `dur` are seconds.
+pub fn trim(input: &str, start: f64, dur: f64, out: &Path) -> Result<()> {
+    encode(input, start, Some(dur), out)
+}
+
+/// Split `input` at `at` seconds into two frame-accurate H.264 + AAC files:
+/// `part1` gets 0..at, `part2` gets at..end.
+pub fn split(input: &str, at: f64, part1: &Path, part2: &Path) -> Result<()> {
+    encode(input, 0.0, Some(at), part1).context("writing part 1")?;
+    encode(input, at, None, part2).context("writing part 2")?;
     Ok(())
 }

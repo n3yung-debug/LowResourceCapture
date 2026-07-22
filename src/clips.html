@@ -41,6 +41,24 @@
   .empty { color:var(--muted); text-align:center; padding:60px 20px; }
   footer { padding:10px 20px; border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
 
+  /* ---- In-app player overlay ---- */
+  #player { position:fixed; inset:0; background:rgba(10,11,14,0.9); display:none;
+    align-items:center; justify-content:center; padding:24px; z-index:11; }
+  #player.on { display:flex; }
+  .player-card { background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    width:min(960px,100%); max-height:100%; overflow:auto; padding:14px 16px; }
+  .player-head { display:flex; align-items:center; justify-content:space-between; gap:12px;
+    margin-bottom:10px; }
+  .player-head .fn { color:var(--muted); font-size:12px; word-break:break-all; }
+  .player-head .x { cursor:pointer; background:var(--field); color:var(--text);
+    border:1px solid var(--border); border-radius:7px; width:30px; height:30px; font-size:14px; flex:0 0 auto; }
+  .player-head .x:hover { border-color:var(--accent2); color:var(--accent2); }
+  .player-stage { position:relative; background:#000; border:1px solid var(--border); border-radius:8px;
+    overflow:hidden; display:flex; align-items:center; justify-content:center; min-height:220px;
+    max-height:70vh; }
+  #pl { width:100%; max-height:70vh; display:none; background:#000; }
+  .player-foot { display:flex; justify-content:flex-end; margin-top:10px; }
+
   /* ---- Trim editor overlay ---- */
   #trim { position:fixed; inset:0; background:rgba(10,11,14,0.86); display:none;
     align-items:center; justify-content:center; padding:24px; z-index:10; }
@@ -98,7 +116,24 @@
     <button class="tbar-btn" id="openFolder">Open clips folder</button>
   </header>
   <main id="list"></main>
-  <footer id="foot">Clips play in your default player. Delete removes the file from disk.</footer>
+  <footer id="foot">Play opens an in-app window; Trim lets you cut or split. Delete removes the file from disk.</footer>
+
+  <!-- In-app player -->
+  <div id="player">
+    <div class="player-card">
+      <div class="player-head">
+        <div class="fn" id="playerName"></div>
+        <button class="x" id="playerClose" title="Close">✕</button>
+      </div>
+      <div class="player-stage">
+        <video id="pl" playsinline controls></video>
+        <div class="pv-hint" id="plHint">Preparing playback…</div>
+      </div>
+      <div class="player-foot">
+        <button class="btn sm" id="plExternal">Open in default player (full quality)</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Trim editor -->
   <div id="trim">
@@ -113,6 +148,7 @@
         <button class="btn sm" id="pvPlaySel">▶ Play selection</button>
         <button class="btn sm" id="setIn">Set In to playhead</button>
         <button class="btn sm" id="setOut">Set Out to playhead</button>
+        <button class="btn sm" id="splitBtn" title="Split into two files at the white playhead">✂ Split at playhead</button>
       </div>
       <div class="tl-wrap">
         <div class="tl loading" id="tl">Loading timeline…</div>
@@ -174,7 +210,7 @@
           <button class="act rename">Rename</button>
           <button class="act del">Delete</button>
         </div>`;
-      row.querySelector('.play').onclick = () => send({ cmd:'play', path:c.path });
+      row.querySelector('.play').onclick = () => HAS_FFMPEG ? openPlayer(c) : send({ cmd:'play', path:c.path });
       row.querySelector('.reveal').onclick = () => send({ cmd:'reveal', path:c.path });
       if (HAS_FFMPEG) row.querySelector('.trim').onclick = () => openTrim(c);
       row.querySelector('.del').onclick = () => {
@@ -200,6 +236,42 @@
       listEl.appendChild(row);
     });
   }
+
+  /* ---------- In-app player ---------- */
+  const playerEl = document.getElementById('player');
+  const pl = document.getElementById('pl');
+  const plHint = document.getElementById('plHint');
+  let playerClip = null;
+
+  function openPlayer(c) {
+    playerClip = c;
+    document.getElementById('playerName').textContent = c.name;
+    pl.pause(); pl.removeAttribute('src'); pl.load();
+    pl.style.display = 'none';
+    plHint.style.display = 'block';
+    plHint.textContent = 'Preparing playback…';
+    playerEl.classList.add('on');
+    send({ cmd:'playPreview', path:c.path });
+  }
+  function closePlayer() {
+    playerEl.classList.remove('on');
+    playerClip = null;
+    pl.pause(); pl.removeAttribute('src'); pl.load();
+  }
+  window.playerReady = function(uri) {
+    if (!playerClip || !uri) return;
+    pl.src = uri;
+    pl.style.display = 'block';
+    plHint.style.display = 'none';
+    pl.play().catch(() => {});
+  };
+  window.playerError = function(msg) {
+    plHint.textContent = (msg || 'Playback preview failed.') + ' Try “Open in default player”.';
+  };
+  document.getElementById('playerClose').onclick = closePlayer;
+  document.getElementById('plExternal').onclick = () => {
+    if (playerClip) send({ cmd:'openExternal', path:playerClip.path });
+  };
 
   /* ---------- Trim editor ---------- */
   const trimEl = document.getElementById('trim');
@@ -391,6 +463,21 @@
     T.outS = Math.min(T.dur, Math.max(pv.currentTime, T.inS + 0.1));
     layout();
   };
+  // Split the whole clip at the playhead into two files.
+  document.getElementById('splitBtn').onclick = () => {
+    if (!T.ready || T.saving || !T.hasPreview) return;
+    const at = pv.currentTime;
+    if (at < 0.1 || at > T.dur - 0.1) { setStatus('Move the playhead away from the very start/end to split.', 'err'); return; }
+    T.saving = true;
+    saveBtn.disabled = true; cancelBtn.disabled = true;
+    setStatus(`Splitting at ${fmtTime(at)}…`, '');
+    send({ cmd:'split', path:T.clip.path, start:at });
+  };
+  window.splitDone = function(ok, detail) {
+    T.saving = false;
+    saveBtn.disabled = false; cancelBtn.disabled = false;
+    setStatus(ok ? `Saved ${detail}` : 'Split failed: ' + detail, ok ? 'ok' : 'err');
+  };
 
   cancelBtn.onclick = () => { if (!T.saving) closeTrim(); };
   saveBtn.onclick = () => {
@@ -403,9 +490,11 @@
     setStatus('Encoding trimmed copy…', '');
     send({ cmd:'trimSave', path:T.clip.path, start:T.inS, end:T.outS });
   };
-  // Esc closes the editor when not mid-save.
+  // Esc closes the player, or the editor when not mid-save.
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && trimEl.classList.contains('on') && !T.saving) closeTrim();
+    if (e.key !== 'Escape') return;
+    if (playerEl.classList.contains('on')) { closePlayer(); return; }
+    if (trimEl.classList.contains('on') && !T.saving) closeTrim();
   });
 
   document.getElementById('openFolder').onclick = () => send({ cmd:'openFolder' });
