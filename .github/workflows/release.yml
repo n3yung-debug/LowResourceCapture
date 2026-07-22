@@ -53,6 +53,24 @@ jobs:
           "target=$target" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "Resolved tag=$tag version=$v target=$target"
 
+      - name: Fetch bundled ffmpeg.exe (editor trim/preview)
+        shell: pwsh
+        run: |
+          # The clip editor shells out to ffmpeg for frame-accurate trim and
+          # filmstrip thumbnails (it has its own HEVC decoder, so no Windows
+          # HEVC extension is needed). Capture never touches it. We bundle a
+          # single ffmpeg.exe next to the app.
+          $ErrorActionPreference = "Stop"
+          $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1/ffmpeg-7.1-essentials_build.zip"
+          $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+          $dst = "$env:RUNNER_TEMP\ffmpeg"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dst -Force
+          $exe = Get-ChildItem -Path $dst -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          if (-not $exe) { throw "ffmpeg.exe not found in downloaded archive" }
+          Copy-Item $exe.FullName ".\ffmpeg.exe" -Force
+          "Bundled ffmpeg: $($exe.FullName) -> .\ffmpeg.exe"
+
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 

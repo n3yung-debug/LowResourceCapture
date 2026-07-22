@@ -232,6 +232,13 @@ pub fn log_path() -> Result<PathBuf> {
     Ok(install_dir()?.join("logs").join("lowresourcecapture.log"))
 }
 
+/// Path to the bundled `ffmpeg.exe` (installed next to the app), if present.
+/// Used only by the clip editor — capture never touches it.
+pub fn ffmpeg_path() -> Option<PathBuf> {
+    let p = install_dir().ok()?.join("ffmpeg.exe");
+    p.exists().then_some(p)
+}
+
 /// Default clips output directory: `<Videos>\LowResourceCapture`.
 ///
 /// `<Videos>` is resolved from the Windows "Videos" **known folder**, so it

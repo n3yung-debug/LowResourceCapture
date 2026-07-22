@@ -10,6 +10,7 @@ mod config;
 mod convert;
 mod encoder;
 mod engine;
+mod ffmpeg;
 mod game_detect;
 mod gui;
 mod hotkeys;

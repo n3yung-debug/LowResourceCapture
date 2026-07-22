@@ -1,32 +1,33 @@
-## LowResourceCapture — alpha: clip library 🎬
+## LowResourceCapture — alpha: trim clips ✂️
 
-The recorder's done, so this starts the clip editor — **Phase 1: a clip library**
-to manage your saved clips.
+The clip editor gets its first real editing feature: **frame-accurate trim**,
+right inside the app. No Windows HEVC codec extension needed — a small **ffmpeg**
+is now bundled and used only by the editor (capture never touches it).
 
-### New: Clip library (tray → **Clip library…**)
-A window listing every clip you've saved, newest first, with its source folder,
-length, size, and date. For each clip:
-- **Play** — opens it in your default player (VLC etc.).
-- **Reveal** — shows the file highlighted in Explorer.
-- **Rename** — rename the file.
-- **Delete** — remove it from disk (with a confirm).
+### New: Trim (Clip library → **Trim**)
+Open the clip library, hit **Trim** on any clip, and you get a timeline:
+- A **filmstrip** of the clip so you can see where you are.
+- Drag the **In / Out** handles (or click the strip) to set the section to keep.
+- Live **In / Length / Out** times as you drag.
+- **Save trimmed copy** writes a new `…-trim.mp4` next to the original — your
+  original clip is never modified.
 
-Like Settings, it runs as a separate window only when open, so it costs nothing
-during capture.
+The trimmed copy is re-encoded to H.264 + AAC, so it's frame-accurate and plays
+and uploads everywhere (Discord, editors, browsers) without a codec extension.
 
-### Coming next (editor phases 2–3)
-- **In-app preview + trim** (scrub, set in/out, save a cut). Note: previewing
-  HEVC clips inside the app needs the Windows "HEVC Video Extensions" codec —
-  we'll sort that (or offer an H.264 record option) when we build trim.
-- Thumbnails, audio-track pick, GIF / share-size export.
+### About the bundled ffmpeg
+It's a single `ffmpeg.exe` installed next to the app and invoked only when you
+trim (or build a timeline). It runs hidden — no console flash. It adds nothing to
+the recorder's footprint while you're gaming; capture is unchanged.
 
 ### Try it
 1. Install over the top.
-2. Tray icon → **Clip library…** → your clips are listed. Try Play / Reveal /
-   Rename / Delete.
+2. Tray icon → **Clip library…** → **Trim** on a clip.
+3. Drag the handles, **Save trimmed copy**, then play the new `…-trim.mp4`.
 
-*(The list is a snapshot from when you open the window — reopen it to refresh
-after recording more.)*
+### Still to come (editor)
+- In-app **preview / playback** while trimming.
+- Thumbnails on each library row, audio-track pick, GIF / share-size export.
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.

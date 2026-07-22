@@ -63,6 +63,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 ; The release build produced by CI (cargo build --release).
 Source: "..\target\release\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
+; Bundled ffmpeg for the clip editor (trim + filmstrip thumbnails). CI downloads
+; it to the repo root before compiling this installer. Editor-only — the capture
+; path never invokes it.
+Source: "..\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; AppUserModelID: "{#MyAppAUMID}"

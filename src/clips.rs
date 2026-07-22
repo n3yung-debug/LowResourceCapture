@@ -1,9 +1,9 @@
-//! Clip library — a WebView2 window (separate `--clips` process) that lists the
-//! saved clips and lets you play, reveal, rename, or delete them. Runs only
-//! when opened, so it costs nothing during capture.
+//! Clip library + trim editor — a WebView2 window (separate `--clips` process).
 //!
-//! Playback opens the clip in the system's default player (which handles HEVC);
-//! an in-app preview is a later phase (HEVC needs the Windows codec extension).
+//! Lists saved clips (play / reveal / rename / delete) and trims them with the
+//! bundled ffmpeg: a filmstrip timeline with draggable in/out handles, saved to
+//! a new frame-accurate `.mp4`. ffmpeg work runs on worker threads and pushes
+//! results back to the page via `EventLoopProxy` → `evaluate_script`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::WindowBuilder;
 use wry::http::Request;
 use wry::WebViewBuilder;
@@ -22,9 +22,10 @@ const CLIPS_HTML: &str = include_str!("clips.html");
 
 enum UserEvent {
     Ipc(String),
+    /// A JS snippet to run in the page (results from worker threads).
+    Eval(String),
 }
 
-/// One saved clip, sent to the page.
 #[derive(Serialize)]
 struct ClipInfo {
     path: String,
@@ -42,6 +43,10 @@ struct IpcMsg {
     path: String,
     #[serde(default)]
     new_path: String,
+    #[serde(default)]
+    start: f64,
+    #[serde(default)]
+    end: f64,
 }
 
 /// Show the clip library window and block until it's closed.
@@ -50,25 +55,27 @@ pub fn run() -> Result<()> {
     let output_dir = config.output_dir.clone();
     let clips = scan_clips(&output_dir);
     let init = format!(
-        "window.__CLIPS__ = {};",
-        serde_json::to_string(&clips).unwrap_or_else(|_| "[]".into())
+        "window.__CLIPS__ = {}; window.__FFMPEG__ = {};",
+        serde_json::to_string(&clips).unwrap_or_else(|_| "[]".into()),
+        crate::ffmpeg::available()
     );
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    let ipc_proxy = proxy.clone();
 
     let window = WindowBuilder::new()
         .with_title("LowResourceCapture — Clips")
-        .with_inner_size(LogicalSize::new(760.0, 620.0))
-        .with_min_inner_size(LogicalSize::new(520.0, 400.0))
+        .with_inner_size(LogicalSize::new(820.0, 660.0))
+        .with_min_inner_size(LogicalSize::new(560.0, 440.0))
         .build(&event_loop)
         .context("create clips window")?;
 
-    let _webview = WebViewBuilder::new()
+    let webview = WebViewBuilder::new()
         .with_html(CLIPS_HTML)
         .with_initialization_script(init)
         .with_ipc_handler(move |req: Request<String>| {
-            let _ = proxy.send_event(UserEvent::Ipc(req.body().clone()));
+            let _ = ipc_proxy.send_event(UserEvent::Ipc(req.body().clone()));
         })
         .build(&window)
         .context("create webview")?;
@@ -77,9 +84,12 @@ pub fn run() -> Result<()> {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(UserEvent::Ipc(msg)) => {
-                if handle_ipc(&msg, &output_dir) {
+                if handle_ipc(&msg, &output_dir, &proxy) {
                     *control_flow = ControlFlow::Exit;
                 }
+            }
+            Event::UserEvent(UserEvent::Eval(js)) => {
+                let _ = webview.evaluate_script(&js);
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -91,7 +101,7 @@ pub fn run() -> Result<()> {
 }
 
 /// Returns true if the window should close.
-fn handle_ipc(msg: &str, output_dir: &Path) -> bool {
+fn handle_ipc(msg: &str, output_dir: &Path, proxy: &EventLoopProxy<UserEvent>) -> bool {
     let m: IpcMsg = match serde_json::from_str(msg) {
         Ok(m) => m,
         Err(e) => {
@@ -115,10 +125,63 @@ fn handle_ipc(msg: &str, output_dir: &Path) -> bool {
                 }
             }
         }
+        // Build the trim timeline (duration + filmstrip) off-thread.
+        "trimOpen" => {
+            let p = proxy.clone();
+            let path = m.path.clone();
+            std::thread::spawn(move || {
+                let js = match crate::ffmpeg::duration_secs(&path) {
+                    Some(dur) => {
+                        let strip = crate::ffmpeg::filmstrip_data_uri(&path, dur, 12)
+                            .unwrap_or_default();
+                        format!("window.trimReady({{duration:{dur},strip:{}}})", js_str(&strip))
+                    }
+                    None => "window.trimError('Could not read this clip.')".to_string(),
+                };
+                let _ = p.send_event(UserEvent::Eval(js));
+            });
+        }
+        // Run the trim off-thread, then tell the page how it went.
+        "trimSave" => {
+            let p = proxy.clone();
+            let path = m.path.clone();
+            let (start, end) = (m.start, m.end);
+            std::thread::spawn(move || {
+                let out = trim_out_path(&path);
+                let dur = (end - start).max(0.1);
+                let js = match crate::ffmpeg::trim(&path, start, dur, &out) {
+                    Ok(()) => format!(
+                        "window.trimDone(true,{})",
+                        js_str(&out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+                    ),
+                    Err(e) => format!("window.trimDone(false,{})", js_str(&format!("{e:#}"))),
+                };
+                let _ = p.send_event(UserEvent::Eval(js));
+            });
+        }
         "close" => return true,
         _ => {}
     }
     false
+}
+
+/// `<dir>/<stem>-trim.mp4`, avoiding overwrite by appending a number.
+fn trim_out_path(input: &str) -> PathBuf {
+    let p = Path::new(input);
+    let dir = p.parent().unwrap_or_else(|| Path::new("."));
+    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
+    let mut out = dir.join(format!("{stem}-trim.mp4"));
+    let mut n = 2;
+    while out.exists() {
+        out = dir.join(format!("{stem}-trim{n}.mp4"));
+        n += 1;
+    }
+    out
+}
+
+/// JSON-encode a string so it's safe to embed in a `evaluate_script` call.
+fn js_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
 /// Scan `root` and its immediate subfolders for `.mp4` clips, newest first.
@@ -181,7 +244,6 @@ fn parse_len(name: &str) -> u32 {
 }
 
 fn open_default(path: &str) {
-    // `cmd /C start "" <path>` opens the file with its default handler.
     let _ = std::process::Command::new("cmd")
         .args(["/C", "start", "", path])
         .spawn();

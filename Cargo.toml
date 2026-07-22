@@ -1,6 +1,6 @@
 [package]
 name = "lowresourcecapture"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
 description = "Low-overhead retroactive game clip recorder for Windows (NVENC/HEVC, ring-buffer instant replay)"
 license = "MIT"
@@ -23,6 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 anyhow = "1"
+base64 = "0.22"  # encode filmstrip JPEGs as data URIs for the trim timeline
 
 # Settings GUI (WebView2). Only runs in the separate `--gui` process, so it
 # adds nothing to the tray/capture footprint while gaming. Versions verified
