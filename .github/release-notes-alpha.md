@@ -1,30 +1,32 @@
-## LowResourceCapture — alpha: mic noise gate + volume 🎙️
+## LowResourceCapture — alpha: clip library 🎬
 
-The mixer's confirmed working (game + Discord + mic all in one track), so this
-build adds mic controls and makes mixed the default.
+The recorder's done, so this starts the clip editor — **Phase 1: a clip library**
+to manage your saved clips.
 
-### Mixed audio is now the default
-Fresh installs record game + mic on one combined track out of the box — no
-setup. (Your existing setting is kept.)
+### New: Clip library (tray → **Clip library…**)
+A window listing every clip you've saved, newest first, with its source folder,
+length, size, and date. For each clip:
+- **Play** — opens it in your default player (VLC etc.).
+- **Reveal** — shows the file highlighted in Explorer.
+- **Rename** — rename the file.
+- **Delete** — remove it from disk (with a confirm).
 
-### Noise gate (kills the breathing)
-A **noise gate** now silences your mic between words, so breathing / idle hiss
-doesn't sit under your game audio. On by default. In **Settings → Audio**:
-- **Noise gate** toggle (ON/OFF).
-- **Gate threshold** slider — closer to 0 cuts more aggressively. Default −45 dB;
-  raise it (e.g. −40, −35) if breathing still sneaks through, lower it if the
-  start of your words ever gets clipped.
+Like Settings, it runs as a separate window only when open, so it costs nothing
+during capture.
 
-### Mic volume slider
-**Settings → Audio → Mic volume** (0–200%) to balance your voice against the
-game/Discord in the mix. Applies live on save.
+### Coming next (editor phases 2–3)
+- **In-app preview + trim** (scrub, set in/out, save a cut). Note: previewing
+  HEVC clips inside the app needs the Windows "HEVC Video Extensions" codec —
+  we'll sort that (or offer an H.264 record option) when we build trim.
+- Thumbnails, audio-track pick, GIF / share-size export.
 
 ### Try it
 1. Install over the top.
-2. Settings → Audio — the noise gate is already on. Record a clip and talk with
-   pauses; the breathing between words should be gone.
-3. Nudge **Mic volume** and **Gate threshold** to taste (both apply the moment
-   you save), and tell me if the defaults need adjusting.
+2. Tray icon → **Clip library…** → your clips are listed. Try Play / Reveal /
+   Rename / Delete.
+
+*(The list is a snapshot from when you open the window — reopen it to refresh
+after recording more.)*
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.

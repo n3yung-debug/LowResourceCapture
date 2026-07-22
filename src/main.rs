@@ -5,6 +5,7 @@
 
 mod audio;
 mod capture;
+mod clips;
 mod config;
 mod convert;
 mod encoder;
@@ -44,15 +45,21 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    // Second process mode: show the settings window instead of the tray app.
+    // Second-process modes: show a window (settings or clip library) instead of
+    // the tray app.
     let is_gui = std::env::args().any(|a| a == "--gui");
-    // Main process starts a fresh log; the GUI subprocess appends so it doesn't
+    let is_clips = std::env::args().any(|a| a == "--clips");
+    // Main process starts a fresh log; window subprocesses append so they don't
     // wipe the main log.
-    init_logging(!is_gui);
+    init_logging(!(is_gui || is_clips));
 
     if is_gui {
         log::info!("launching settings GUI");
         return gui::run();
+    }
+    if is_clips {
+        log::info!("launching clip library");
+        return clips::run();
     }
 
     log::info!("LowResourceCapture starting");
@@ -95,6 +102,7 @@ fn run() -> Result<()> {
 struct Tray {
     _icon: tray_icon::TrayIcon,
     settings_id: tray_icon::menu::MenuId,
+    clips_id: tray_icon::menu::MenuId,
     open_clips_id: tray_icon::menu::MenuId,
     quit_id: tray_icon::menu::MenuId,
     output_dir: std::path::PathBuf,
@@ -102,10 +110,12 @@ struct Tray {
 
 fn build_tray(config: &Config) -> Result<Tray> {
     let menu = Menu::new();
+    let clips = MenuItem::new("Clip library…", true, None);
     let settings = MenuItem::new("Settings…", true, None);
     let open_clips = MenuItem::new("Open clips folder", true, None);
     let quit = MenuItem::new("Quit", true, None);
 
+    menu.append(&clips)?;
     menu.append(&settings)?;
     menu.append(&open_clips)?;
     menu.append(&PredefinedMenuItem::separator())?;
@@ -122,6 +132,7 @@ fn build_tray(config: &Config) -> Result<Tray> {
     Ok(Tray {
         _icon: tray_icon,
         settings_id: settings.id().clone(),
+        clips_id: clips.id().clone(),
         open_clips_id: open_clips.id().clone(),
         quit_id: quit.id().clone(),
         output_dir: config.output_dir.clone(),
@@ -192,6 +203,8 @@ fn run_message_loop(
         while let Ok(ev) = menu_rx.try_recv() {
             if ev.id == tray.settings_id {
                 launch_settings_gui(main_tid);
+            } else if ev.id == tray.clips_id {
+                launch_clips();
             } else if ev.id == tray.open_clips_id {
                 // Ensure the clips folder actually exists before opening it,
                 // so it always resolves to a real folder under Videos.
@@ -257,6 +270,18 @@ fn launch_settings_gui(main_tid: u32) {
             });
         }
         Err(e) => log::warn!("could not launch settings GUI: {e}"),
+    }
+}
+
+/// Launch the clip library as a separate process (no config reload needed).
+fn launch_clips() {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Err(e) = std::process::Command::new(exe).arg("--clips").spawn() {
+                log::warn!("could not launch clip library: {e}");
+            }
+        }
+        Err(e) => log::warn!("cannot locate own exe for clip library: {e}"),
     }
 }
 
