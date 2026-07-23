@@ -88,8 +88,26 @@
   .tl .handle::after { content:""; width:4px; height:60%; background:var(--accent2); border-radius:2px;
     box-shadow:0 0 0 2px rgba(10,11,14,0.55); }
   .tl .playhead { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:#fff;
-    box-shadow:0 0 0 1px rgba(0,0,0,0.55); pointer-events:none; display:none; }
+    box-shadow:0 0 0 1px rgba(0,0,0,0.55); pointer-events:none; display:none; z-index:2; }
+  .tl .cut { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:#ffd23f;
+    box-shadow:0 0 0 1px rgba(0,0,0,0.5); pointer-events:none; z-index:1; }
   .tl.loading { display:flex; align-items:center; justify-content:center; color:var(--muted); }
+  /* Pieces (split segments) */
+  .segs-wrap { margin-top:14px; display:none; }
+  .segs-wrap.on { display:block; }
+  .segs-head { color:var(--muted); font-size:12px; margin-bottom:6px; }
+  .segs { display:flex; gap:8px; flex-wrap:wrap; }
+  .seg { display:flex; align-items:center; gap:6px; background:var(--field);
+    border:1px solid var(--border); border-radius:8px; padding:5px 6px 5px 9px; font-size:12px;
+    font-variant-numeric:tabular-nums; }
+  .seg.drop { opacity:0.4; }
+  .seg .rng { cursor:pointer; user-select:none; }
+  .seg.drop .rng { text-decoration:line-through; }
+  .seg .mv, .seg .kp { cursor:pointer; background:var(--panel2); color:var(--text);
+    border:1px solid var(--border); border-radius:5px; width:22px; height:22px; line-height:1;
+    font-size:12px; display:flex; align-items:center; justify-content:center; }
+  .seg .mv:hover, .seg .kp:hover { border-color:var(--accent2); }
+  .seg .kp.on { color:var(--ok); }
   .tl-times { display:flex; justify-content:space-between; color:var(--muted); font-size:12px;
     margin-top:8px; font-variant-numeric:tabular-nums; }
   .tl-times b { color:var(--text); font-weight:600; }
@@ -116,7 +134,7 @@
     <button class="tbar-btn" id="openFolder">Open clips folder</button>
   </header>
   <main id="list"></main>
-  <footer id="foot">Play opens an in-app window; Trim lets you cut or split. Delete removes the file from disk.</footer>
+  <footer id="foot">Play opens an in-app window; Trim lets you cut, split &amp; reassemble pieces into one clip. Delete removes the file from disk.</footer>
 
   <!-- In-app player -->
   <div id="player">
@@ -148,7 +166,7 @@
         <button class="btn sm" id="pvPlaySel">▶ Play selection</button>
         <button class="btn sm" id="setIn">Set In to playhead</button>
         <button class="btn sm" id="setOut">Set Out to playhead</button>
-        <button class="btn sm" id="splitBtn" title="Split into two files at the white playhead">✂ Split at playhead</button>
+        <button class="btn sm" id="splitBtn" title="Add a cut at the white playhead, splitting the piece there">✂ Split at playhead</button>
       </div>
       <div class="tl-wrap">
         <div class="tl loading" id="tl">Loading timeline…</div>
@@ -158,10 +176,15 @@
           <span>Out <b id="tOut">0:00.0</b></span>
         </div>
       </div>
+      <div class="segs-wrap" id="segsWrap">
+        <div class="segs-head">Pieces — ◀ ▶ reorder · click the time or ✓ to include/exclude · assembled top-to-bottom, left-to-right:</div>
+        <div class="segs" id="segs"></div>
+      </div>
       <div class="trim-foot">
         <div class="status" id="trimStatus"></div>
         <div class="btns">
           <button class="btn" id="trimCancel">Cancel</button>
+          <button class="btn" id="assembleSave" style="display:none">Save assembled clip</button>
           <button class="btn primary" id="trimSave">Save trimmed copy</button>
         </div>
       </div>
@@ -288,17 +311,25 @@
   const pv = document.getElementById('pv');
   const pvHint = document.getElementById('pvHint');
   const pvControls = document.getElementById('pvControls');
+  const segsWrap = document.getElementById('segsWrap');
+  const segsEl = document.getElementById('segs');
+  const assembleBtn = document.getElementById('assembleSave');
   let selStop = null; // when playing the selection, time at which to auto-pause
 
-  let T = { clip:null, dur:0, inS:0, outS:0, ready:false, saving:false, hasPreview:false };
+  // T.segs partitions the source [0,dur] into ordered pieces; splitting adds a
+  // cut, and "Save assembled clip" concatenates the kept pieces in list order.
+  let T = { clip:null, dur:0, inS:0, outS:0, ready:false, saving:false, hasPreview:false, segs:[] };
 
   function openTrim(c) {
-    T = { clip:c, dur:0, inS:0, outS:0, ready:false, saving:false, hasPreview:false };
+    T = { clip:c, dur:0, inS:0, outS:0, ready:false, saving:false, hasPreview:false, segs:[] };
     selStop = null;
     document.getElementById('trimName').textContent = c.name;
     tl.className = 'tl loading';
     tl.style.backgroundImage = 'none';
     tl.textContent = 'Loading timeline…';
+    segsWrap.classList.remove('on');
+    assembleBtn.style.display = 'none';
+    segsEl.innerHTML = '';
     // Reset preview.
     pv.pause(); pv.removeAttribute('src'); pv.load();
     pv.style.display = 'none';
@@ -334,7 +365,9 @@
     tl.appendChild(shadeL); tl.appendChild(shadeR);
     tl.appendChild(selEl); tl.appendChild(hIn); tl.appendChild(hOut);
     tl.appendChild(playheadEl);
+    T.segs = [{ start:0, end:T.dur, keep:true }];
     saveBtn.disabled = false;
+    renderSegs();
     layout();
   };
   window.trimError = function(msg) {
@@ -384,7 +417,7 @@
     document.getElementById('tOut').textContent = fmtTime(T.outS);
     document.getElementById('tLen').textContent = fmtTime(Math.max(0, T.outS - T.inS));
   }
-  window.addEventListener('resize', layout);
+  window.addEventListener('resize', () => { layout(); renderCuts(); });
 
   // Keep the timeline playhead in sync with the preview, and stop at the out
   // point when playing just the selection.
@@ -463,20 +496,73 @@
     T.outS = Math.min(T.dur, Math.max(pv.currentTime, T.inS + 0.1));
     layout();
   };
-  // Split the whole clip at the playhead into two files.
+  // Split adds a cut at the playhead, dividing the piece there into two.
   document.getElementById('splitBtn').onclick = () => {
-    if (!T.ready || T.saving || !T.hasPreview) return;
-    const at = pv.currentTime;
-    if (at < 0.1 || at > T.dur - 0.1) { setStatus('Move the playhead away from the very start/end to split.', 'err'); return; }
-    T.saving = true;
-    saveBtn.disabled = true; cancelBtn.disabled = true;
-    setStatus(`Splitting at ${fmtTime(at)}…`, '');
-    send({ cmd:'split', path:T.clip.path, start:at });
+    if (!T.ready || T.saving) return;
+    const at = pv.currentTime; // source time
+    const idx = T.segs.findIndex(s => at > s.start + 0.05 && at < s.end - 0.05);
+    if (idx < 0) { setStatus('Move the playhead inside a piece (not on a cut) to split.', 'err'); return; }
+    const s = T.segs[idx];
+    T.segs.splice(idx, 1, { start:s.start, end:at, keep:s.keep }, { start:at, end:s.end, keep:s.keep });
+    setStatus('', '');
+    renderSegs();
   };
-  window.splitDone = function(ok, detail) {
+
+  // Draw the yellow cut lines (internal piece boundaries) on the timeline.
+  function renderCuts() {
+    tl.querySelectorAll('.cut').forEach(el => el.remove());
+    if (!T.ready || T.dur <= 0) return;
+    const w = tl.clientWidth;
+    const seen = new Set();
+    T.segs.forEach(s => {
+      if (s.start > 0.001 && !seen.has(s.start.toFixed(3))) {
+        seen.add(s.start.toFixed(3));
+        const c = document.createElement('div');
+        c.className = 'cut';
+        c.style.left = (s.start / T.dur) * w + 'px';
+        tl.appendChild(c);
+      }
+    });
+  }
+
+  // Render the piece chips, and toggle the assemble UI on once there's a cut.
+  function renderSegs() {
+    const multi = T.segs.length > 1;
+    segsWrap.classList.toggle('on', multi);
+    assembleBtn.style.display = multi ? 'inline-block' : 'none';
+    segsEl.innerHTML = '';
+    T.segs.forEach((s, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'seg' + (s.keep ? '' : ' drop');
+      chip.innerHTML =
+        `<button class="mv" title="Move earlier">◀</button>` +
+        `<span class="rng">${fmtTime(s.start)}–${fmtTime(s.end)}</span>` +
+        `<button class="kp${s.keep ? ' on' : ''}" title="Include / exclude">${s.keep ? '✓' : '✕'}</button>` +
+        `<button class="mv" title="Move later">▶</button>`;
+      const [mvL, , kp, mvR] = chip.children;
+      mvL.onclick = () => { if (i > 0) { [T.segs[i-1], T.segs[i]] = [T.segs[i], T.segs[i-1]]; renderSegs(); } };
+      mvR.onclick = () => { if (i < T.segs.length-1) { [T.segs[i+1], T.segs[i]] = [T.segs[i], T.segs[i+1]]; renderSegs(); } };
+      const toggle = () => { s.keep = !s.keep; renderSegs(); };
+      kp.onclick = toggle;
+      chip.querySelector('.rng').onclick = toggle;
+      segsEl.appendChild(chip);
+    });
+    renderCuts();
+  }
+
+  assembleBtn.onclick = () => {
+    if (!T.ready || T.saving) return;
+    const kept = T.segs.filter(s => s.keep).map(s => [s.start, s.end]);
+    if (!kept.length) { setStatus('Include at least one piece.', 'err'); return; }
+    T.saving = true;
+    saveBtn.disabled = true; cancelBtn.disabled = true; assembleBtn.disabled = true;
+    setStatus(`Assembling ${kept.length} piece${kept.length === 1 ? '' : 's'}…`, '');
+    send({ cmd:'assemble', path:T.clip.path, segments:kept });
+  };
+  window.assembleDone = function(ok, detail) {
     T.saving = false;
-    saveBtn.disabled = false; cancelBtn.disabled = false;
-    setStatus(ok ? `Saved ${detail}` : 'Split failed: ' + detail, ok ? 'ok' : 'err');
+    saveBtn.disabled = false; cancelBtn.disabled = false; assembleBtn.disabled = false;
+    setStatus(ok ? `Saved ${detail}` : 'Assemble failed: ' + detail, ok ? 'ok' : 'err');
   };
 
   cancelBtn.onclick = () => { if (!T.saving) closeTrim(); };

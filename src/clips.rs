@@ -47,6 +47,9 @@ struct IpcMsg {
     start: f64,
     #[serde(default)]
     end: f64,
+    /// Ordered `(start, end)` source ranges for the "assemble" command.
+    #[serde(default)]
+    segments: Vec<(f64, f64)>,
 }
 
 /// Show the clip library window and block until it's closed.
@@ -170,23 +173,19 @@ fn handle_ipc(msg: &str, output_dir: &Path, proxy: &EventLoopProxy<UserEvent>) -
         }
         // Full-quality playback in the OS default player (from the player window).
         "openExternal" => open_default(&m.path),
-        // Split the clip at the playhead into two files (off-thread).
-        "split" => {
+        // Assemble the chosen pieces (in order) into one new clip (off-thread).
+        "assemble" => {
             let p = proxy.clone();
             let path = m.path.clone();
-            let at = m.start;
+            let segments = m.segments.clone();
             std::thread::spawn(move || {
-                let (p1, p2) = split_out_paths(&path);
-                let js = match crate::ffmpeg::split(&path, at, &p1, &p2) {
+                let out = assemble_out_path(&path);
+                let js = match crate::ffmpeg::assemble(&path, &segments, &out) {
                     Ok(()) => format!(
-                        "window.splitDone(true,{})",
-                        js_str(&format!(
-                            "{} + {}",
-                            p1.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                            p2.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-                        ))
+                        "window.assembleDone(true,{})",
+                        js_str(&out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
                     ),
-                    Err(e) => format!("window.splitDone(false,{})", js_str(&format!("{e:#}"))),
+                    Err(e) => format!("window.assembleDone(false,{})", js_str(&format!("{e:#}"))),
                 };
                 let _ = p.send_event(UserEvent::Eval(js));
             });
@@ -229,23 +228,18 @@ fn trim_out_path(input: &str) -> PathBuf {
     out
 }
 
-/// `<dir>/<stem>-part1.mp4` and `-part2.mp4`, sharing a numeric suffix if
-/// needed so the pair never overwrites existing files.
-fn split_out_paths(input: &str) -> (PathBuf, PathBuf) {
+/// `<dir>/<stem>-edit.mp4`, avoiding overwrite by appending a number.
+fn assemble_out_path(input: &str) -> PathBuf {
     let p = Path::new(input);
-    let dir = p.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let dir = p.parent().unwrap_or_else(|| Path::new("."));
     let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
-    let mut suffix = String::new();
+    let mut out = dir.join(format!("{stem}-edit.mp4"));
     let mut n = 2;
-    loop {
-        let p1 = dir.join(format!("{stem}-part1{suffix}.mp4"));
-        let p2 = dir.join(format!("{stem}-part2{suffix}.mp4"));
-        if !p1.exists() && !p2.exists() {
-            return (p1, p2);
-        }
-        suffix = format!("_{n}");
+    while out.exists() {
+        out = dir.join(format!("{stem}-edit{n}.mp4"));
         n += 1;
     }
+    out
 }
 
 /// JSON-encode a string so it's safe to embed in a `evaluate_script` call.

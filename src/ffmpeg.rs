@@ -131,10 +131,57 @@ pub fn trim(input: &str, start: f64, dur: f64, out: &Path) -> Result<()> {
     encode(input, start, Some(dur), out)
 }
 
-/// Split `input` at `at` seconds into two frame-accurate H.264 + AAC files:
-/// `part1` gets 0..at, `part2` gets at..end.
-pub fn split(input: &str, at: f64, part1: &Path, part2: &Path) -> Result<()> {
-    encode(input, 0.0, Some(at), part1).context("writing part 1")?;
-    encode(input, at, None, part2).context("writing part 2")?;
-    Ok(())
+/// Assemble one clip from an ordered list of `(start, end)` source ranges:
+/// each range is re-encoded to a frame-accurate H.264 + AAC segment, then the
+/// segments are concatenated (stream-copied) into `out` in the given order.
+/// This backs the "piece together your splits" editor.
+pub fn assemble(input: &str, segments: &[(f64, f64)], out: &Path) -> Result<()> {
+    if segments.is_empty() {
+        anyhow::bail!("no pieces to assemble");
+    }
+    // One piece: just a trim, no concat needed.
+    if segments.len() == 1 {
+        let (s, e) = segments[0];
+        return encode(input, s, Some((e - s).max(0.1)), out);
+    }
+
+    let tmp = std::env::temp_dir();
+    let pid = std::process::id();
+    let mut parts: Vec<std::path::PathBuf> = Vec::new();
+    let result = (|| -> Result<()> {
+        for (i, (s, e)) in segments.iter().enumerate() {
+            let part = tmp.join(format!("lrc_seg_{pid}_{i}.mp4"));
+            encode(input, *s, Some((e - s).max(0.1)), &part)
+                .with_context(|| format!("encoding piece {}", i + 1))?;
+            parts.push(part);
+        }
+        // concat demuxer list: forward-slashed, single-quoted absolute paths.
+        let list = tmp.join(format!("lrc_concat_{pid}.txt"));
+        let mut txt = String::new();
+        for part in &parts {
+            txt.push_str(&format!("file '{}'\n", part.to_string_lossy().replace('\\', "/")));
+        }
+        std::fs::write(&list, &txt).context("writing concat list")?;
+
+        let ff = ffmpeg().context("ffmpeg.exe not found next to the app")?;
+        let status = Command::new(ff)
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i"])
+            .arg(&list)
+            .args(["-c", "copy", "-movflags", "+faststart"])
+            .arg(out)
+            .status()
+            .context("running ffmpeg concat")?;
+        let _ = std::fs::remove_file(&list);
+        if !status.success() {
+            anyhow::bail!("ffmpeg concat exited with {status}");
+        }
+        Ok(())
+    })();
+
+    // Always clean up the temp segment files.
+    for part in &parts {
+        let _ = std::fs::remove_file(part);
+    }
+    result
 }

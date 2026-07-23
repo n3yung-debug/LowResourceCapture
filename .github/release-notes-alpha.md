@@ -1,37 +1,39 @@
-## LowResourceCapture — alpha: play + split ▶️✂️
+## LowResourceCapture — alpha: cut, split & reassemble ▶️✂️🧩
 
-Building on the trim editor: clips now **play in their own in-app window**, and
-you can **split a clip in two** at the playhead. Still powered by the bundled
-ffmpeg (editor-only — capture never touches it), so HEVC clips just work with no
-Windows codec extension.
+The trim window is now a little editor. Play clips in-app, make cuts, then
+**piece the parts together into one clip** — all in the window, powered by the
+bundled ffmpeg (editor-only; capture never touches it, and HEVC just works with
+no Windows codec extension).
 
-### New: in-app player (Clip library → **Play**)
-Hitting **Play** now opens the clip in a player window right inside the app —
-same integrated feel as the trim window, and it plays HEVC too (ffmpeg does the
-decode). Inside the player there's an **Open in default player (full quality)**
-button if you'd rather watch it full-resolution in VLC / your default app.
+### New: split & assemble (Trim window)
+- **✂ Split at playhead** adds a cut where the white playhead is, dividing that
+  piece in two. Split as many times as you like.
+- Each piece shows up as a chip below the timeline. For each one you can:
+  - **◀ / ▶** — move it earlier/later in the order,
+  - **click the time / ✓** — include or exclude it.
+- **Save assembled clip** stitches the included pieces, in your chosen order,
+  into one new frame-accurate `…-edit.mp4` next to the original. The original is
+  never modified.
 
-*(The in-app player is a quick 720p transcode for convenience; the file on disk
-is untouched and full quality.)*
+So you can cut out a dull middle and rejoin the rest, or reorder moments — then
+save a single clip.
 
-### New: split at the playhead (Trim window → **✂ Split at playhead**)
-Open **Trim**, move the white playhead to the cut point (scrub the preview or
-click the filmstrip), then **Split at playhead**. You get two new frame-accurate
-files next to the original — `…-part1.mp4` and `…-part2.mp4`. The original is
-never modified.
-
-### Also in the trim window (recap)
+### Also in this build
+- **In-app player** — **Play** opens the clip in a player window inside the app
+  (plays HEVC via ffmpeg), with an **Open in default player (full quality)**
+  button for external playback.
 - Live preview with sound, draggable **In / Out** handles, **Play selection**,
-  **Set In / Set Out to playhead**, and **Save trimmed copy**.
+  **Set In / Set Out to playhead**, and **Save trimmed copy** for a simple
+  single-range trim.
 
 ### Try it
 1. Install over the top.
-2. Tray → **Clip library…** → **Play** a clip (it opens in-app).
-3. **Trim** a clip → scrub to a moment → **Split at playhead** → check for the
-   two `…-part1/2.mp4` files.
+2. Tray → **Clip library…** → **Play** a clip (opens in-app).
+3. **Trim** a clip → scrub → **✂ Split at playhead** a few times → exclude/reorder
+   pieces → **Save assembled clip**, then play the new `…-edit.mp4`.
 
-*(The list is a snapshot from when you open the window — reopen it to see newly
-saved trims/splits.)*
+*(The clip list is a snapshot from when you open the window — reopen it to see
+newly saved edits.)*
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.
