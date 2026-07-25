@@ -48,23 +48,42 @@ fn parse_hms(s: &str) -> Option<f64> {
 
 /// A horizontal filmstrip of `tiles` evenly-spaced frames as a JPEG data URI,
 /// for the trim timeline.
+///
+/// Decodes **keyframes only** (`-skip_frame nokey`). A full decode of a 60s
+/// 1440p HEVC clip is ~3600 frames of software HEVC — the single biggest cause
+/// of the CPU spike when opening a clip. Our recordings carry a keyframe about
+/// once a second, which is far more than a 12-tile strip needs, so this gets
+/// the same picture for ~1/60th of the decode work.
 pub fn filmstrip_data_uri(input: &str, dur: f64, tiles: u32) -> Option<String> {
     let ff = ffmpeg()?;
+    let t0 = std::time::Instant::now();
     let tmp = std::env::temp_dir().join(format!("lrc_strip_{}.jpg", std::process::id()));
     let fps = (tiles as f64 / dur.max(0.1)).clamp(0.01, 60.0);
     let vf = format!("fps={fps},scale=160:-1,tile={tiles}x1");
     let ok = Command::new(ff)
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["-hide_banner", "-y", "-i", input, "-vf", &vf, "-frames:v", "1", "-q:v", "4"])
+        .args([
+            "-hide_banner",
+            "-y",
+            "-skip_frame", "nokey",   // decode only keyframes (cheap)
+            "-hwaccel", "auto",       // GPU decode when available; silently ignored if not
+            "-i", input,
+            "-an", "-sn",             // no audio/subtitle decode
+            "-vf", &vf,
+            "-frames:v", "1",
+            "-q:v", "4",
+        ])
         .arg(&tmp)
         .status()
         .ok()?
         .success();
     if !ok {
+        let _ = std::fs::remove_file(&tmp);
         return None;
     }
     let bytes = std::fs::read(&tmp).ok()?;
     let _ = std::fs::remove_file(&tmp);
+    log::info!("ffmpeg: filmstrip in {} ms", t0.elapsed().as_millis());
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Some(format!("data:image/jpeg;base64,{b64}"))
 }
@@ -80,55 +99,96 @@ pub fn filmstrip_data_uri(input: &str, dur: f64, tiles: u32) -> Option<String> {
 pub fn preview_data_uri(input: &str, height: u32, crf: u32) -> Option<String> {
     let ff = ffmpeg()?;
     let tmp = std::env::temp_dir().join(format!("lrc_preview_{}.mp4", std::process::id()));
-    let ok = Command::new(ff)
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "-hide_banner", "-y", "-i", input,
-            "-vf", &format!("scale=-2:{height}"),
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", &crf.to_string(),
-            "-c:a", "aac",
-            "-movflags", "+faststart",
-        ])
-        .arg(&tmp)
-        .status()
-        .ok()?
-        .success();
-    if !ok {
+    let scale = format!("scale=-2:{height}");
+    let crf_s = crf.to_string();
+
+    // Try the GPU encoder first, then fall back to software. NVENC runs on the
+    // dedicated encoder block (separate silicon from the CPU *and* the shaders),
+    // so the preview stops pegging cores. The software fallback is thread-capped
+    // for the same reason — a background preview must never eat the whole CPU
+    // while a game is running.
+    let attempts: [(&str, Vec<&str>); 2] = [
+        (
+            "h264_nvenc",
+            vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "2500k"],
+        ),
+        (
+            "libx264",
+            vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", &crf_s, "-threads", "4"],
+        ),
+    ];
+
+    for (name, venc) in &attempts {
+        let t0 = std::time::Instant::now();
+        let mut cmd = Command::new(&ff);
+        cmd.creation_flags(CREATE_NO_WINDOW)
+            .args(["-hide_banner", "-y", "-hwaccel", "auto", "-i", input])
+            .args(["-vf", &scale, "-r", "30"])
+            .args(venc)
+            .args(["-c:a", "aac", "-movflags", "+faststart"])
+            .arg(&tmp);
+        let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
+        if ok {
+            if let Ok(bytes) = std::fs::read(&tmp) {
+                let _ = std::fs::remove_file(&tmp);
+                log::info!(
+                    "ffmpeg: {height}p preview via {name} in {} ms ({} KB)",
+                    t0.elapsed().as_millis(),
+                    bytes.len() / 1024
+                );
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                return Some(format!("data:video/mp4;base64,{b64}"));
+            }
+        }
+        log::warn!("ffmpeg: preview via {name} failed, trying next encoder");
         let _ = std::fs::remove_file(&tmp);
-        return None;
     }
-    let bytes = std::fs::read(&tmp).ok()?;
-    let _ = std::fs::remove_file(&tmp);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Some(format!("data:video/mp4;base64,{b64}"))
+    None
 }
 
 /// Re-encode a range of `input` to a frame-accurate H.264 + AAC file at `out`.
 /// `dur` = `None` means "to the end of the clip". Shared by trim and split.
 fn encode(input: &str, start: f64, dur: Option<f64>, out: &Path) -> Result<()> {
     let ff = ffmpeg().context("ffmpeg.exe not found next to the app")?;
-    let mut cmd = Command::new(ff);
-    cmd.creation_flags(CREATE_NO_WINDOW)
-        .args(["-hide_banner", "-y", "-ss", &format!("{start}"), "-i", input]);
-    if let Some(d) = dur {
-        cmd.args(["-t", &format!("{d}")]);
-    }
-    cmd.args([
-        "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
-        "-c:a", "aac", "-movflags", "+faststart",
-    ]);
-    let status = cmd.arg(out).status().context("running ffmpeg")?;
-    if !status.success() {
-        anyhow::bail!("ffmpeg exited with {status}");
-    }
-    Ok(())
-}
 
-/// Frame-accurate trim, re-encoded to H.264 + AAC so the result is exact and
-/// plays/previews everywhere. `start` and `dur` are seconds.
-pub fn trim(input: &str, start: f64, dur: f64, out: &Path) -> Result<()> {
-    encode(input, start, Some(dur), out)
+    // GPU encode first (high bitrate so the exported edit stays visually clean),
+    // software as a fallback. Same reasoning as the preview: keep the CPU free.
+    let attempts: [(&str, &[&str]); 2] = [
+        (
+            "h264_nvenc",
+            &["-c:v", "h264_nvenc", "-preset", "p5", "-b:v", "30M", "-maxrate", "40M", "-bufsize", "60M"],
+        ),
+        (
+            "libx264",
+            &["-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-threads", "4"],
+        ),
+    ];
+
+    let mut last_err = String::new();
+    for (name, venc) in &attempts {
+        let t0 = std::time::Instant::now();
+        let mut cmd = Command::new(&ff);
+        cmd.creation_flags(CREATE_NO_WINDOW).args([
+            "-hide_banner", "-y", "-hwaccel", "auto",
+            "-ss", &format!("{start}"), "-i", input,
+        ]);
+        if let Some(d) = dur {
+            cmd.args(["-t", &format!("{d}")]);
+        }
+        cmd.args(*venc)
+            .args(["-c:a", "aac", "-movflags", "+faststart"])
+            .arg(out);
+        match cmd.status() {
+            Ok(s) if s.success() => {
+                log::info!("ffmpeg: encoded piece via {name} in {} ms", t0.elapsed().as_millis());
+                return Ok(());
+            }
+            Ok(s) => last_err = format!("{name} exited with {s}"),
+            Err(e) => last_err = format!("{name} failed to run: {e}"),
+        }
+        log::warn!("ffmpeg: {last_err}; trying next encoder");
+    }
+    anyhow::bail!("ffmpeg encode failed ({last_err})")
 }
 
 /// Assemble one clip from an ordered list of `(start, end)` source ranges:

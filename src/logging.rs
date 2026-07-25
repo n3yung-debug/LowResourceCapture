@@ -75,11 +75,19 @@ pub fn init(log_path: &Path, truncate: bool) {
         let _ = std::fs::create_dir_all(parent);
     }
 
+    // Start a fresh file for the main process, then ALWAYS open in append mode.
+    // Append is what makes multi-process logging work: the window subprocesses
+    // (`--gui`, `--clips`) write to the same file, and every write goes to the
+    // true end of file. Opening the main process in plain write mode instead
+    // would keep its own offset, so the recorder's once-a-second stat lines
+    // would silently overwrite whatever a subprocess had appended — which is
+    // how clip-library lines went missing from the logs entirely.
+    if truncate {
+        let _ = std::fs::File::create(log_path);
+    }
     let sink: Box<dyn Write + Send> = match OpenOptions::new()
         .create(true)
-        .write(true)
-        .truncate(truncate)
-        .append(!truncate)
+        .append(true)
         .open(log_path)
     {
         Ok(f) => Box::new(f),

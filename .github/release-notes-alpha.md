@@ -1,39 +1,49 @@
-## LowResourceCapture — alpha: cut, split & reassemble ▶️✂️🧩
+## LowResourceCapture — alpha: real timeline editor 🎬
 
-The trim window is now a little editor. Play clips in-app, make cuts, then
-**piece the parts together into one clip** — all in the window, powered by the
-bundled ffmpeg (editor-only; capture never touches it, and HEVC just works with
-no Windows codec extension).
+The clip editor now works like a proper timeline: **split into blocks, drag them
+around, trim their edges, delete what you don't want, then save one clip.**
+Plus edits get their own organized folder, and opening a clip is much lighter on
+the CPU.
 
-### New: split & assemble (Trim window)
-- **✂ Split at playhead** adds a cut where the white playhead is, dividing that
-  piece in two. Split as many times as you like.
-- Each piece shows up as a chip below the timeline. For each one you can:
-  - **◀ / ▶** — move it earlier/later in the order,
-  - **click the time / ✓** — include or exclude it.
-- **Save assembled clip** stitches the included pieces, in your chosen order,
-  into one new frame-accurate `…-edit.mp4` next to the original. The original is
-  never modified.
+### New: block timeline (Clip library → **Edit**)
+- **✂ Split** cuts the block under the playhead in two.
+- **Drag a block** to move it earlier/later in the sequence.
+- **Drag a block's edges** to trim just that block.
+- **🗑 Delete** removes the selected block (or press Del).
+- **▶ Play** previews the *edited* sequence — playback hops across your cuts, so
+  you hear/see exactly what you'll get.
+- **Save edited clip** renders the timeline into one new file.
 
-So you can cut out a dull middle and rejoin the rest, or reorder moments — then
-save a single clip.
+Keyboard: **Space** play/pause · **S** split · **Del** delete · **Esc** close.
+**Reset** puts the clip back to a single block.
 
-### Also in this build
-- **In-app player** — **Play** opens the clip in a player window inside the app
-  (plays HEVC via ffmpeg), with an **Open in default player (full quality)**
-  button for external playback.
-- Live preview with sound, draggable **In / Out** handles, **Play selection**,
-  **Set In / Set Out to playhead**, and **Save trimmed copy** for a simple
-  single-range trim.
+### New: edits go to their own folder
+Edited clips now save to `…\LowResourceCapture\Edits\<category>\`, mirroring the
+same per-game folders your recordings use — e.g. an edit of a clip in
+`…\LowResourceCapture\FCN\` lands in `…\LowResourceCapture\Edits\FCN\`. Originals
+are never modified, and the library now lists clips from those nested folders too
+(the badge shows `Edits\FCN`).
+
+### Much lighter on the CPU when opening a clip
+Opening a 60s clip used to spike the CPU hard. Two causes, both fixed:
+- The filmstrip decoded **every** frame of a 1440p HEVC clip (~3600 frames). It
+  now decodes **keyframes only** — same strip, a fraction of the work.
+- The preview and the export encoded in software across all cores. They now use
+  your **GPU encoder (NVENC)** when available, falling back to a **thread-capped**
+  software encode. Timings are written to the log so it's measurable.
+
+### Fixed
+- **Clip-library actions were missing from the log.** The recorder's stat lines
+  were overwriting anything the editor window wrote, so editor problems left no
+  trace. All processes now append properly.
+- **Reveal** is renamed **Open in Folder** — clearer about what it does.
 
 ### Try it
 1. Install over the top.
-2. Tray → **Clip library…** → **Play** a clip (opens in-app).
-3. **Trim** a clip → scrub → **✂ Split at playhead** a few times → exclude/reorder
-   pieces → **Save assembled clip**, then play the new `…-edit.mp4`.
-
-*(The clip list is a snapshot from when you open the window — reopen it to see
-newly saved edits.)*
+2. Tray → **Clip library…** → **Edit** on a clip.
+3. Split a few times, drag a block somewhere else, delete a boring bit, press
+   **Play** to check it, then **Save edited clip** and look in
+   `…\LowResourceCapture\Edits\`.
 
 ### Note
 Unsigned installer — SmartScreen + UAC prompts are expected.

@@ -1,9 +1,13 @@
-//! Clip library + trim editor — a WebView2 window (separate `--clips` process).
+//! Clip library + timeline editor — a WebView2 window (separate `--clips`
+//! process).
 //!
-//! Lists saved clips (play / reveal / rename / delete) and trims them with the
-//! bundled ffmpeg: a filmstrip timeline with draggable in/out handles, saved to
-//! a new frame-accurate `.mp4`. ffmpeg work runs on worker threads and pushes
-//! results back to the page via `EventLoopProxy` → `evaluate_script`.
+//! Lists saved clips (play / open in folder / rename / delete), plays them in
+//! an in-app window, and edits them on a block timeline: split at the playhead,
+//! drag blocks to reorder, trim their edges, delete blocks, then render the
+//! sequence to one new `.mp4` under `<clips root>\Edits\<category>\`.
+//!
+//! All ffmpeg work runs on worker threads and pushes results back to the page
+//! via `EventLoopProxy` → `evaluate_script`, so the UI never blocks on it.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -43,10 +47,6 @@ struct IpcMsg {
     path: String,
     #[serde(default)]
     new_path: String,
-    #[serde(default)]
-    start: f64,
-    #[serde(default)]
-    end: f64,
     /// Ordered `(start, end)` source ranges for the "assemble" command.
     #[serde(default)]
     segments: Vec<(f64, f64)>,
@@ -178,8 +178,9 @@ fn handle_ipc(msg: &str, output_dir: &Path, proxy: &EventLoopProxy<UserEvent>) -
             let p = proxy.clone();
             let path = m.path.clone();
             let segments = m.segments.clone();
+            let root = output_dir.to_path_buf();
             std::thread::spawn(move || {
-                let out = assemble_out_path(&path);
+                let out = assemble_out_path(&path, &root);
                 let js = match crate::ffmpeg::assemble(&path, &segments, &out) {
                     Ok(()) => format!(
                         "window.assembleDone(true,{})",
@@ -190,49 +191,44 @@ fn handle_ipc(msg: &str, output_dir: &Path, proxy: &EventLoopProxy<UserEvent>) -
                 let _ = p.send_event(UserEvent::Eval(js));
             });
         }
-        // Run the trim off-thread, then tell the page how it went.
-        "trimSave" => {
-            let p = proxy.clone();
-            let path = m.path.clone();
-            let (start, end) = (m.start, m.end);
-            std::thread::spawn(move || {
-                let out = trim_out_path(&path);
-                let dur = (end - start).max(0.1);
-                let js = match crate::ffmpeg::trim(&path, start, dur, &out) {
-                    Ok(()) => format!(
-                        "window.trimDone(true,{})",
-                        js_str(&out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
-                    ),
-                    Err(e) => format!("window.trimDone(false,{})", js_str(&format!("{e:#}"))),
-                };
-                let _ = p.send_event(UserEvent::Eval(js));
-            });
-        }
         "close" => return true,
         _ => {}
     }
     false
 }
 
-/// `<dir>/<stem>-trim.mp4`, avoiding overwrite by appending a number.
-fn trim_out_path(input: &str) -> PathBuf {
+/// Edited clips go to `<clips root>\Edits\<category>\<stem>-edit.mp4`, where
+/// `<category>` mirrors the source clip's per-game subfolder (so an edit of
+/// `…\LowResourceCapture\FCN\clip.mp4` lands in `…\LowResourceCapture\Edits\FCN\`).
+/// Clips sitting directly in the root get `Edits\` with no category. Falls back
+/// to the source folder if the Edits folder can't be created.
+fn assemble_out_path(input: &str, root: &Path) -> PathBuf {
     let p = Path::new(input);
-    let dir = p.parent().unwrap_or_else(|| Path::new("."));
-    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
-    let mut out = dir.join(format!("{stem}-trim.mp4"));
-    let mut n = 2;
-    while out.exists() {
-        out = dir.join(format!("{stem}-trim{n}.mp4"));
-        n += 1;
-    }
-    out
-}
+    let src_dir = p.parent().unwrap_or_else(|| Path::new("."));
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "clip".into());
 
-/// `<dir>/<stem>-edit.mp4`, avoiding overwrite by appending a number.
-fn assemble_out_path(input: &str) -> PathBuf {
-    let p = Path::new(input);
-    let dir = p.parent().unwrap_or_else(|| Path::new("."));
-    let stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "clip".into());
+    // Category = the source subfolder name, when the clip lives under the root.
+    // Re-editing something that's already in Edits keeps it where it is, so we
+    // never build up Edits\Edits\… .
+    let edits_root = root.join("Edits");
+    let mut dir = if src_dir.starts_with(&edits_root) {
+        src_dir.to_path_buf()
+    } else if src_dir != root {
+        match src_dir.file_name() {
+            Some(cat) => edits_root.join(cat),
+            None => edits_root.clone(),
+        }
+    } else {
+        edits_root.clone()
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        log::warn!("clips: could not create {}, saving next to the source", dir.display());
+        dir = src_dir.to_path_buf();
+    }
+
     let mut out = dir.join(format!("{stem}-edit.mp4"));
     let mut n = 2;
     while out.exists() {
@@ -247,16 +243,26 @@ fn js_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
-/// Scan `root` and its immediate subfolders for `.mp4` clips, newest first.
+/// Scan `root` and its subfolders (up to 2 levels down) for `.mp4` clips,
+/// newest first. Two levels is what `Edits\<category>\` needs — edits are
+/// nested one deeper than recorded clips, and they must show up in the library
+/// like anything else.
 fn scan_clips(root: &Path) -> Vec<ClipInfo> {
-    let mut dirs: Vec<PathBuf> = vec![root.to_path_buf()];
-    if let Ok(rd) = std::fs::read_dir(root) {
-        for e in rd.flatten() {
-            if e.path().is_dir() {
-                dirs.push(e.path());
+    fn collect(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+        out.push(dir.to_path_buf());
+        if depth == 0 {
+            return;
+        }
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                if e.path().is_dir() {
+                    collect(&e.path(), depth - 1, out);
+                }
             }
         }
     }
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    collect(root, 2, &mut dirs);
 
     let mut out = Vec::new();
     for dir in dirs {
@@ -277,10 +283,16 @@ fn scan_clips(root: &Path) -> Vec<ClipInfo> {
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let name = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            // Folder label relative to the clips root, so an edit shows as
+            // "Edits\FCN" rather than a bare "FCN" that looks like a recording.
             let folder = p
                 .parent()
-                .and_then(|x| x.file_name())
-                .map(|x| x.to_string_lossy().into_owned())
+                .map(|d| {
+                    d.strip_prefix(root)
+                        .unwrap_or(d)
+                        .to_string_lossy()
+                        .into_owned()
+                })
                 .unwrap_or_default();
             out.push(ClipInfo {
                 path: p.to_string_lossy().into_owned(),
