@@ -234,6 +234,35 @@ face value.
 - **Death-card threshold: still untested on native/1440p footage.** This
   sample contains no death, so the 0.443–0.500 vs 0.178 margin measured on
   the Twitch VOD remains INFERENCE-carries-to-native, not verified.
+- **Nick confirms (2026-08-07, second pass): the kill audio cue IS the same
+  between Training Room and live PvP, and describes it as "a slight audio
+  sound"** — subtle, not a loud sting. This lifts the earlier hedge (dummy
+  kills might not trigger a server-side audio cue); audio now gets the same
+  generalization pass as the particle VFX, per Nick's direct statement, not
+  inference.
+- **Precise onset correction — annotated timestamps were off by up to 1.85s.**
+  Re-running the warm-particle burst detector (validated on this same game)
+  against this file located the true kill instants at 9.45s / 32.85s / 110.25s
+  vs. the annotated 9 / 31 / 109. For a cue described as "slight," that much
+  drift could put it outside a tight analysis window entirely — worth
+  remembering for any future quiet-signal search: don't trust an eyeballed
+  timestamp, re-derive the onset from a validated visual detector first.
+- **Re-run at the corrected onsets, band-limited envelope correlation —
+  INCONCLUSIVE, not negative, and the pattern argues against a universal
+  sting.** pk1~pk2 and pk2~pk3 both spike to 0.65–0.77 correlation across
+  *every* band tested (bass through 16kHz) on both live tracks; pk1~pk3 stays
+  near zero in all of them. A real kill-confirmation cue should show up in
+  all three pairs, not two of three, and broadband correlation across bass
+  *and* treble simultaneously looks more like a shared weapon-swing/impact
+  sound (pk1 and pk2 coincidentally ending on the same finisher animation)
+  than a narrowband UI-style sting. **PENDING: Nick is listening to six
+  2.5s clips (3 kills × 2 tracks) sent directly** to identify which track is
+  game audio and confirm/deny by ear whether pk1–pk2's match is the real cue
+  or a coincidental shared attack sound. This is the fourth automated
+  variant of this search (whole-VOD, tight-window, precisely-realigned,
+  band-limited) — per this project's failure-handling rule, two-plus
+  automated misses is the trigger to change the *kind* of evidence rather
+  than try a fifth blind variant, hence handing this to a human ear.
 
 ## Confidence discipline for this repo
 
