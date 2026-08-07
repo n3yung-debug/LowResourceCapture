@@ -1,4 +1,17 @@
 /target
 Cargo.lock
-*.mp4
 *.log
+
+# Local recordings used as ClipAnalyzer samples/training data (see
+# crates/analyzer/samples/README.md). Every format the analyzer's file picker
+# accepts — never commit the video itself.
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.ts
+*.webm
+
+# The .labels.json sidecar next to each recording IS tracked — it's the
+# growing hand-labelled dataset (timestamps, verdicts, drawn boxes) and it's
+# small plain text. Only the video is excluded above.

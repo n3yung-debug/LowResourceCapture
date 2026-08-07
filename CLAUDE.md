@@ -97,13 +97,27 @@ Build Tools (C++ workload).
 
 ## Layered build plan
 
-L1 foundation (done) → L2 WGC capture + NVENC HEVC encode → L3 WASAPI audio →
-L4 mp4 mux/save → L5 game auto-detect wiring, toast, live hotkey reload,
-run-at-startup. Each layer must `cargo build` on Nick's PC before the next.
+L1 foundation → L2 WGC capture + NVENC HEVC encode → L3 WASAPI audio → L4 mp4
+mux/save → L5 game auto-detect wiring, toast, live hotkey reload,
+run-at-startup — **all done.** `game_detect.rs`, `toast.rs`, `startup.rs`, and
+the settings `gui.rs` are real implementations, not stubs (corrected
+2026-08-07; this line previously undersold shipped work — the block-timeline
+clip editor and NVENC-backed preview/export also shipped since, in `shared`).
 
 **L6 — VOD analyzer** (kills/deaths → clip timeline). L6a workspace split +
-second installer (done, this commit) → L6b detectors → L6c review UI with
-confirm/reject marking → L6d train/export → L6e ONNX inference.
+second installer (done) → L6b death-card detector (done, validated over a
+full VOD) → L6c review UI: background scan, scrub-and-mark, confirm/reject,
+export (done) → **now adding**: `BBox` + `Kind::MonsterKill` in the label
+store (done) as the data model for a trained nameplate detector + event
+classifier, since colour-only detection of a kill was ruled out — box-drawing
+UI, training pipeline, and ONNX inference are not built yet.
+
+Repo layout note (2026-08-07): `profiles/` moved to `crates/analyzer/profiles/`
+(analyzer-owned, not shared) and `installer/analyzer.iss` was renamed to
+`installer/clipanalyzer.iss` to match its own product name/output filename.
+Local recordings used for calibration/training go in
+`crates/analyzer/samples/` (videos git-ignored, `.labels.json` sidecars
+tracked — see that folder's README).
 
 ## Mistfall Hunter detection findings (VOD analysis 2026-08-07)
 

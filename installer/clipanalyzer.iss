@@ -5,7 +5,7 @@
 ; an offline tool that is free to use every core. Different AppId, different
 ; install dir, independent install/uninstall — you can have either, or both.
 ;
-; Build locally with:  ISCC.exe /DMyAppVersion=0.1.0-alpha installer\analyzer.iss
+; Build locally with:  ISCC.exe /DMyAppVersion=0.1.0-alpha installer\clipanalyzer.iss
 ; Output: installer\Output\ClipAnalyzer-Setup-<version>.exe
 
 #ifndef MyAppVersion

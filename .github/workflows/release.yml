@@ -83,7 +83,7 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & "$iscc" "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\lowresourcecapture.iss"
           if ($LASTEXITCODE -ne 0) { throw "recorder installer failed" }
-          & "$iscc" "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\analyzer.iss"
+          & "$iscc" "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\clipanalyzer.iss"
           if ($LASTEXITCODE -ne 0) { throw "analyzer installer failed" }
 
       - name: Publish GitHub prerelease
