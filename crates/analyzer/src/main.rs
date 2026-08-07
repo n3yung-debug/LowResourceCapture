@@ -13,6 +13,10 @@
 //! profile format below are real and tested; the detectors are not written yet.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The event model and profile format are exercised by their unit tests but not
+// yet wired into a detector, so every item reads as dead code. Remove this once
+// L6b calls into them.
+#![allow(dead_code)]
 
 mod event;
 mod profile;

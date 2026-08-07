@@ -144,7 +144,8 @@ fn build_tray(config: &Config) -> Result<Tray> {
 /// The app icon (32x32 RGBA), generated from `assets/icon.ico` and embedded so
 /// the tray icon matches the exe/installer icon with no runtime asset files.
 fn make_tray_icon() -> tray_icon::Icon {
-    const RGBA: &[u8] = include_bytes!("../assets/tray-32.rgba");
+    // Repo-root `assets/`, three levels up from crates/recorder/src/.
+    const RGBA: &[u8] = include_bytes!("../../../assets/tray-32.rgba");
     tray_icon::Icon::from_rgba(RGBA.to_vec(), 32, 32).expect("building tray icon")
 }
 
