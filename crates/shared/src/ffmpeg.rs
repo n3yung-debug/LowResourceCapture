@@ -146,6 +146,69 @@ pub fn preview_data_uri(input: &str, height: u32, crf: u32) -> Option<String> {
     None
 }
 
+/// A preview of just `dur` seconds starting at `start`, as a data URI.
+///
+/// The whole-file [`preview_data_uri`] is fine for a 60s clip but hopeless for
+/// a 9-minute VOD — base64 of the entire transcode would be hundreds of MB in
+/// a single string. Reviewing detections only ever needs the seconds around
+/// each one, so this encodes that window and nothing else.
+///
+/// `-ss` goes before `-i` for a fast keyframe seek; the window may therefore
+/// begin up to a keyframe early, which is harmless for review.
+pub fn preview_range_data_uri(
+    input: &str,
+    start: f64,
+    dur: f64,
+    height: u32,
+    crf: u32,
+) -> Option<String> {
+    let ff = ffmpeg()?;
+    let tmp = std::env::temp_dir()
+        .join(format!("lrc_review_{}_{}.mp4", std::process::id(), start as u64));
+    let scale = format!("scale=-2:{height}");
+    let crf_s = crf.to_string();
+    let start_s = format!("{:.3}", start.max(0.0));
+    let dur_s = format!("{dur:.3}");
+
+    let attempts: [(&str, Vec<&str>); 2] = [
+        ("h264_nvenc", vec!["-c:v", "h264_nvenc", "-preset", "p1", "-b:v", "2500k"]),
+        (
+            "libx264",
+            vec!["-c:v", "libx264", "-preset", "veryfast", "-crf", &crf_s, "-threads", "4"],
+        ),
+    ];
+
+    for (name, venc) in &attempts {
+        let t0 = std::time::Instant::now();
+        let ok = Command::new(&ff)
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-hide_banner", "-y", "-hwaccel", "auto"])
+            .args(["-ss", &start_s, "-i", input, "-t", &dur_s])
+            .args(["-vf", &scale, "-r", "30"])
+            .args(venc)
+            .args(["-c:a", "aac", "-movflags", "+faststart"])
+            .arg(&tmp)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            if let Ok(bytes) = std::fs::read(&tmp) {
+                let _ = std::fs::remove_file(&tmp);
+                log::info!(
+                    "ffmpeg: review window {start_s}s+{dur_s}s via {name} in {} ms ({} KB)",
+                    t0.elapsed().as_millis(),
+                    bytes.len() / 1024
+                );
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                return Some(format!("data:video/mp4;base64,{b64}"));
+            }
+        }
+        log::warn!("ffmpeg: review window via {name} failed, trying next encoder");
+        let _ = std::fs::remove_file(&tmp);
+    }
+    None
+}
+
 /// Re-encode a range of `input` to a frame-accurate H.264 + AAC file at `out`.
 /// `dur` = `None` means "to the end of the clip". Shared by trim and split.
 fn encode(input: &str, start: f64, dur: Option<f64>, out: &Path) -> Result<()> {

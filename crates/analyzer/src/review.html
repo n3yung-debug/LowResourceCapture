@@ -1,0 +1,167 @@
+<meta charset="utf-8">
+<title>Review detections</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f25; --line: #2c313a; --text: #e6e8ec;
+    --dim: #939aa6; --ok: #4ea36b; --no: #b8503f; --pend: #b08a3c; --accent: #4a7fb5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; background: var(--bg);
+         color: var(--text); font: 13px/1.45 "Segoe UI", system-ui, sans-serif; }
+
+  #side { width: 300px; flex: none; border-right: 1px solid var(--line);
+          display: flex; flex-direction: column; }
+  #head { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  #head h1 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+  #tally { color: var(--dim); font-size: 12px; }
+  #list { flex: 1; overflow-y: auto; }
+  .ev { padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
+        display: flex; gap: 8px; align-items: baseline; }
+  .ev:hover { background: #21252c; }
+  .ev.sel { background: #263041; box-shadow: inset 3px 0 0 var(--accent); }
+  .ev .t { font-variant-numeric: tabular-nums; color: var(--dim); }
+  .ev .k { flex: 1; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.p { background: var(--pend); } .dot.y { background: var(--ok); }
+  .dot.n { background: var(--no); }
+  .man { font-size: 10px; color: var(--accent); border: 1px solid var(--accent);
+         border-radius: 3px; padding: 0 3px; }
+
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #stage { flex: 1; display: flex; align-items: center; justify-content: center;
+           background: #000; min-height: 0; position: relative; }
+  video { max-width: 100%; max-height: 100%; }
+  #msg { position: absolute; color: var(--dim); }
+  #bar { padding: 10px 12px; border-top: 1px solid var(--line); background: var(--panel); }
+  #where { color: var(--dim); margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+  button { background: #262b33; color: var(--text); border: 1px solid var(--line);
+           border-radius: 4px; padding: 6px 12px; cursor: pointer; font: inherit; }
+  button:hover { background: #2f353f; }
+  button.y { border-color: var(--ok); } button.n { border-color: var(--no); }
+  kbd { background: #10131a; border: 1px solid var(--line); border-radius: 3px;
+        padding: 0 4px; font-size: 11px; color: var(--dim); }
+  #keys { margin-top: 8px; color: var(--dim); font-size: 12px; }
+</style>
+
+<div id="side">
+  <div id="head">
+    <h1 id="vid">—</h1>
+    <div id="tally">loading…</div>
+  </div>
+  <div id="list"></div>
+</div>
+
+<div id="main">
+  <div id="stage"><video id="v" playsinline controls></video><div id="msg"></div></div>
+  <div id="bar">
+    <div id="where">—</div>
+    <button class="y" onclick="verdict(true)">✓ Confirm <kbd>Y</kbd></button>
+    <button class="n" onclick="verdict(false)">✕ Reject <kbd>N</kbd></button>
+    <button onclick="mark('playerkill')">+ Kill here <kbd>K</kbd></button>
+    <button onclick="mark('death')">+ Death here <kbd>D</kbd></button>
+    <button onclick="exportClips()">Export confirmed → clip</button>
+    <div id="keys">
+      <kbd>←</kbd><kbd>→</kbd> prev/next · <kbd>Space</kbd> play/pause ·
+      marks land at the playhead, so scrub to the exact moment first
+    </div>
+  </div>
+</div>
+
+<script>
+  const send = m => window.ipc.postMessage(JSON.stringify(m));
+  const v = document.getElementById("v");
+  let data = { labels: [], video: "", pre: 12, post: 4 };
+  let sel = -1, winStart = 0;
+
+  window.reviewData = d => {
+    data = d;
+    document.getElementById("vid").textContent = d.video.split(/[\\/]/).pop();
+    render();
+    if (d.labels.length) {
+      // Open on the first thing still awaiting a verdict — that's the queue.
+      const i = d.labels.findIndex(l => l.confirmed === null);
+      select(i >= 0 ? i : 0);
+    } else {
+      msg("No detections. Scrub the video and press K or D to mark events by hand.");
+    }
+  };
+
+  function msg(t) { document.getElementById("msg").textContent = t || ""; }
+
+  function render() {
+    const c = { y: 0, n: 0, p: 0 };
+    data.labels.forEach(l => c[l.confirmed === true ? "y" : l.confirmed === false ? "n" : "p"]++);
+    document.getElementById("tally").textContent =
+      `${c.y} confirmed · ${c.n} rejected · ${c.p} pending`;
+    document.getElementById("list").innerHTML = data.labels.map((l, i) => {
+      const s = l.confirmed === true ? "y" : l.confirmed === false ? "n" : "p";
+      return `<div class="ev ${i === sel ? "sel" : ""}" onclick="select(${i})">
+        <span class="dot ${s}"></span>
+        <span class="t">${fmt(l.at)}</span>
+        <span class="k">${l.kind === "playerkill" ? "Player kill" : "Death"}</span>
+        ${l.origin === "manual" ? '<span class="man">manual</span>' : ""}
+      </div>`;
+    }).join("");
+  }
+
+  function fmt(s) {
+    const m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return `${m}:${String(r).padStart(2, "0")}`;
+  }
+
+  function select(i) {
+    if (i < 0 || i >= data.labels.length) return;
+    sel = i; render();
+    const l = data.labels[i];
+    winStart = Math.max(0, l.at - data.pre);
+    document.getElementById("where").textContent =
+      `${l.kind === "playerkill" ? "Player kill" : "Death"} at ${fmt(l.at)} — showing ${fmt(winStart)} onward`;
+    v.removeAttribute("src"); v.load();
+    msg("building preview…");
+    send({ cmd: "clip", index: i });
+  }
+
+  window.clipReady = uri => {
+    msg("");
+    v.src = uri;
+    // Jump to the event itself; the window starts pre-roll seconds earlier.
+    v.currentTime = Math.min(data.pre, 5);
+    v.play().catch(() => {});
+  };
+  window.clipError = m => msg(m);
+
+  // The label list is rebuilt from Rust after every change, so the UI can never
+  // drift from what's actually on disk.
+  window.updated = d => { data = d; render(); };
+
+  function verdict(ok) {
+    if (sel < 0) return;
+    send({ cmd: "verdict", index: sel, ok });
+    const next = data.labels.findIndex((l, i) => i > sel && l.confirmed === null);
+    if (next >= 0) setTimeout(() => select(next), 120);
+  }
+
+  function mark(kind) {
+    // Playhead position within the preview window, mapped back to source time.
+    const at = winStart + (v.currentTime || 0);
+    send({ cmd: "mark", kind, at });
+  }
+
+  function exportClips() { send({ cmd: "export" }); }
+
+  document.addEventListener("keydown", e => {
+    if (e.target.tagName === "INPUT") return;
+    const k = e.key.toLowerCase();
+    if (k === "y") verdict(true);
+    else if (k === "n") verdict(false);
+    else if (k === "k") mark("playerkill");
+    else if (k === "d") mark("death");
+    else if (e.key === "ArrowLeft") select(sel - 1);
+    else if (e.key === "ArrowRight") select(sel + 1);
+    else if (e.key === " ") { e.preventDefault(); v.paused ? v.play() : v.pause(); }
+    else return;
+    e.preventDefault();
+  });
+
+  send({ cmd: "load" });
+</script>

@@ -23,6 +23,7 @@ mod event;
 mod frames;
 mod labels;
 mod profile;
+mod review;
 
 use anyhow::Result;
 
@@ -38,13 +39,18 @@ fn main() -> Result<()> {
         eprintln!(
             "clipanalyzer {}\n\
              \n\
-             Usage: clipanalyzer <video-file>\n\
+             Usage: clipanalyzer <video-file> [--scan-only]\n\
              \n\
-             Scans a recording for kills and deaths, then opens them on the clip\n\
-             timeline for editing.\n\
+             Scans a recording for deaths, then opens a review window where you\n\
+             confirm or reject each one and mark any it missed. Verdicts are\n\
+             saved beside the video as <video>.labels.json and survive re-scans,\n\
+             so a re-tuned detector never costs you a review.\n\
              \n\
-             Detection is not implemented yet — this build only validates that a\n\
-             file is readable and that the bundled ffmpeg is available.",
+             Only death detection exists so far. Player kills have to be marked\n\
+             by hand (press K at the moment) — those marks are what a kill\n\
+             detector will eventually be trained on.\n\
+             \n\
+               --scan-only   scan and print, don't open the review window",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -93,7 +99,7 @@ fn main() -> Result<()> {
 
     // Fold into the label set beside the video, keeping any verdicts already
     // recorded. Re-running a re-tuned detector must never cost you a review.
-    let label_path = std::path::Path::new(input).with_extension("labels.json");
+    let label_path = review::label_path_for(input);
     let mut set = if label_path.exists() {
         labels::LabelSet::load(&label_path)?
     } else {
@@ -109,19 +115,13 @@ fn main() -> Result<()> {
         label_path.display()
     );
 
-    let approved = set.confirmed();
-    if approved.is_empty() {
-        println!(
-            "  nothing confirmed yet — the review UI (next layer) is where detections \
-             become clips, and where your verdicts become training data"
-        );
-    } else {
-        for (ev, (s, e)) in approved.iter().zip(
-            event::segments(&approved, 12.0, 4.0, duration).iter(),
-        ) {
-            println!("  {:?} at {:>8.1}s  clip {:.1}s–{:.1}s", ev.kind, ev.at, s, e);
+    // Hand straight over to the review window — judging the detections is the
+    // point, and every verdict made there is also a training example.
+    if args.iter().any(|a| a == "--scan-only") {
+        for ev in set.confirmed() {
+            println!("  {:?} at {:>8.1}s", ev.kind, ev.at);
         }
+        return Ok(());
     }
-
-    Ok(())
+    review::run(input)
 }
