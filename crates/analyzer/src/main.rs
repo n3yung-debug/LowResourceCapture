@@ -21,6 +21,7 @@
 mod detect;
 mod event;
 mod frames;
+mod labels;
 mod profile;
 
 use anyhow::Result;
@@ -83,22 +84,43 @@ fn main() -> Result<()> {
     // A death card is on screen for seconds, so one death produces a run of
     // detections. Collapse each run into a single event.
     let deaths = event::cluster(hits, 3.0);
-    let segs = event::segments(&deaths, 12.0, 4.0, duration);
 
     println!(
         "scanned {scanned} frames in {:.1}s — {} death(s)",
         started.elapsed().as_secs_f64(),
         deaths.len()
     );
-    for (ev, (s, e)) in deaths.iter().zip(segs.iter()) {
+
+    // Fold into the label set beside the video, keeping any verdicts already
+    // recorded. Re-running a re-tuned detector must never cost you a review.
+    let label_path = std::path::Path::new(input).with_extension("labels.json");
+    let mut set = if label_path.exists() {
+        labels::LabelSet::load(&label_path)?
+    } else {
+        labels::LabelSet::new(input, "")
+    };
+    let added = set.merge_detections(deaths, 3.0);
+    set.save(&label_path)?;
+
+    let (ok, no, pending) = set.tally();
+    println!(
+        "labels: {added} new, {ok} confirmed, {no} rejected, {pending} awaiting review \
+         -> {}",
+        label_path.display()
+    );
+
+    let approved = set.confirmed();
+    if approved.is_empty() {
         println!(
-            "  death at {:>8.1}s  (confidence {:.2})  clip {:.1}s–{:.1}s",
-            ev.at, ev.score, s, e
+            "  nothing confirmed yet — the review UI (next layer) is where detections \
+             become clips, and where your verdicts become training data"
         );
-    }
-    if deaths.is_empty() {
-        println!("  nothing found — if you know there's a death here, the profile may be \
-                  stale against the current game build");
+    } else {
+        for (ev, (s, e)) in approved.iter().zip(
+            event::segments(&approved, 12.0, 4.0, duration).iter(),
+        ) {
+            println!("  {:?} at {:>8.1}s  clip {:.1}s–{:.1}s", ev.kind, ev.at, s, e);
+        }
     }
 
     Ok(())
