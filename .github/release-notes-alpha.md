@@ -1,107 +1,73 @@
-## alpha: scrub any recording, mark kills by hand 🔍
+## alpha: the analyzer window actually shows up 🔍
 
-### The review window works when nothing is detected
-Which is most of the time — you extract far more often than you die, so a
-typical VOD scans clean. Previously that left an empty window with no video and
-nothing to do, which was backwards: that's exactly when you need to mark kills
-yourself.
+Three first-run bugs in a row meant ClipAnalyzer never got as far as being
+usable. This release fixes the last of them.
 
-The window now **serves the recording with range support**, so the player seeks
-against the original file:
+### Fixed: nothing appeared after you picked a VOD
+The analyzer scanned the **entire** recording before creating any window. On a
+9-minute 1080p60 file that's a long silent wait — the process was visible in
+Task Manager with nothing ever coming to the foreground, which is
+indistinguishable from a hang.
 
-- **Scrub freely whether or not anything was detected.** Open a VOD, find a
-  kill, press **K**. That's how kills get labelled until a detector exists.
-- **No transcode.** Selecting a detection is an instant seek, not a wait.
-- **Marks land on the real timestamp** — the playhead is source time now, so
-  there's no window-offset arithmetic to get subtly wrong.
+The window now opens **immediately** and scans behind itself:
 
-**If a video won't play:** WebView2 may not decode HEVC. H.264 sources (Twitch
-VODs, OBS defaults) are fine; recordings from LowResourceCapture itself are
-HEVC and may not play here yet. The window says so rather than showing a blank
-player.
+- **Progress shows as a percentage** while it works.
+- **The video is scrubbable and K/D work during the scan** — playback never
+  depended on it finishing.
+- **Detections appear in the list as they land.**
+- **A scan that fails says so in the window** instead of dying quietly.
 
----
+### Also fixed, earlier in this run
+- **Launching from the shortcut did nothing.** No arguments now opens a file
+  picker rather than printing usage to a console that doesn't exist.
+- **A clean scan left an empty window.** The recording is now served with range
+  support, so you can scrub and hand-mark whether or not anything was detected
+  — which matters, because you extract far more often than you die.
+- **Errors are shown, not printed.** Plus a real log at
+  `<install>\logs\clipanalyzer.log`.
 
-## Also in this release: the analyzer launches at all
+## What ClipAnalyzer does
 
-### Fixed: the analyzer did nothing when you double-clicked it
-`clipanalyzer.exe` is a windowed build, so it has no console — and its shortcut
-launched it with no arguments, which hit a "print usage and exit" path. The
-usage text went to a stderr that doesn't exist, so the app just vanished.
+Point it at a video — a Twitch VOD, an OBS or NVIDIA recording:
 
-- **No arguments now opens a file picker** instead of exiting.
-- **Errors show a message box** as well as logging. Before this, any failure was
-  indistinguishable from "it doesn't start".
-- **The analyzer writes a log at all** now — `<install>\logs\clipanalyzer.log`.
-  It previously never initialized logging, so there was nothing to inspect.
-
-### Known gap
-If a scan finds **zero** detections, the review window opens with no video
-loaded, so there's nothing to scrub and you can't hand-mark anything. That
-matters for a VOD with kills but no deaths. Being fixed separately.
-
----
-
-## Everything below shipped in 0.1.23 — a second app 🔍
-
-**This release ships two installers.** The recorder is unchanged in behaviour;
-the new one is an offline tool that scans a recording for deaths, lets you
-judge what it found, and exports the good bits as one clip.
-
-| installer | what it is |
-|---|---|
-| `LowResourceCapture-Setup-*.exe` | the tray recorder, as before |
-| `ClipAnalyzer-Setup-*.exe` | **new** — offline VOD analyzer |
-
-They install, upgrade and uninstall independently. You can have either or both.
-
-### Why two apps
-The recorder is a tiny always-resident process tuned for minimal footprint
-while you game. Scene analysis wants the opposite — every core, offline, no
-regard for size. Those don't belong in one binary, so they aren't in one.
-**Nothing about the recorder's footprint changes.**
-
-### ClipAnalyzer: what it does today
-Point it at a video file — a Twitch VOD, an OBS or NVIDIA recording:
-
-1. It scans for **death screens** and lists what it found.
-2. A **review window** shows each detection with a preview of the seconds
-   around it. **Y** confirms, **N** rejects, **←/→** walks the queue,
+1. It scans for **death screens**.
+2. **Y** confirms a detection, **N** rejects it, **←/→** walks the queue,
    **Space** plays.
-3. **K** and **D** mark a player kill or death at the playhead — for anything
-   it missed.
-4. **Export confirmed → clip** assembles everything you approved into one
+3. **K** and **D** mark a player kill or death at the playhead.
+4. **Export confirmed → clip** assembles what you approved into one
    `<video>_highlights.mp4`.
 
-Your verdicts save to `<video>.labels.json` beside the source and **survive
-re-scanning**, so re-running an improved detector never costs you a review.
+Verdicts save to `<video>.labels.json` beside the source and **survive
+re-scanning**, so a re-tuned detector never costs you a review.
 
-### What it does NOT do yet
-**Kills are not detected — you mark them by hand.** That's deliberate rather
-than unfinished: Mistfall Hunter has no kill feed, and measurement showed the
-usual shortcuts don't work. The kill audio sting isn't recoverable from a
-Twitch transcode, the gold death-burst fires just as hard on monsters as on
-players, and the enemy nameplate can't be found by colour — a matchmaking
-screen with no enemy present has *more* red than an actual fight.
+## Kills are marked by hand, and that's deliberate
 
-So the kill detector needs training data, and hand-marking in the review window
-is how that data gets made. Each **K** you press is one example.
+Mistfall Hunter has no kill feed, and measurement ruled out the shortcuts:
+the kill audio sting isn't recoverable from a Twitch transcode, the gold
+death-burst fires just as hard on monsters as on players (the largest burst
+measured was a monster kill), and the enemy nameplate can't be found by colour
+— a matchmaking screen with no enemy present has *more* red than a real fight.
 
-### Death detection, measured
+So a kill detector needs training data, and hand-marking is how it gets made.
+Every **K** is one example.
+
+## Death detection, measured
+
 Swept across a full 9:22 VOD at 2 fps (1123 frames): the death card scores
-**0.443–0.500**, and the loudest false positive in the other nine minutes
-scores **0.178**. The threshold sits at 0.30 — roughly 2.5× margin either way,
-and the five highest-scoring frames in the whole recording are the death.
+**0.443–0.500**; the loudest false positive in the other nine minutes scores
+**0.178**. Threshold 0.30 — about 2.5× margin either way, and the five
+highest-scoring frames in the whole recording are the death.
 
-Calibrated against a 1080p Twitch transcode. The margin is wide enough that it
-should carry to native 1440p footage, but that's expectation, not measurement.
+Calibrated on a 1080p Twitch transcode. The margin should carry to native
+1440p, but that's expectation, not measurement.
 
-### Try it
-1. Install `ClipAnalyzer-Setup-*.exe`.
-2. Run it on a VOD with a death in it.
-3. Confirm what it found, mark a kill or two by hand, export.
+## Known limits
 
-### Note
-Unsigned installers — SmartScreen + UAC prompts are expected. The analyzer's
-review window has never run outside CI, so expect rough edges and say what's
-wrong rather than working around it.
+- **HEVC may not play.** WebView2 doesn't always decode it. H.264 sources
+  (Twitch VODs, OBS defaults) are fine; recordings from LowResourceCapture
+  itself are HEVC and may not play here yet. The window says so rather than
+  showing a blank player.
+- **Scanning is slower than it needs to be** — it decodes every frame to sample
+  two per second. Keyframe-only sampling would be far faster and should still
+  catch a card that's up for 2.5s.
+- Unsigned installers, so SmartScreen and UAC prompts are expected.
