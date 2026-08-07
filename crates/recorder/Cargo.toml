@@ -1,0 +1,74 @@
+[package]
+name = "lowresourcecapture"
+description = "Low-overhead retroactive game clip recorder for Windows (NVENC/HEVC, ring-buffer instant replay)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lowresourcecapture"
+path = "src/main.rs"
+
+# Windowed subsystem so no console window pops up when launched from Explorer.
+# (Release builds only; debug keeps the console for logs.)
+
+[dependencies]
+shared = { path = "../shared" }
+
+# Thin Win32 wrappers, no heavy runtime.
+global-hotkey = "0.8"   # 0.8.0, 2026-05-01
+tray-icon = "0.24"      # 0.24.1, 2026-06-10
+anyhow.workspace = true
+directories.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+# Settings GUI (WebView2). Only runs in the separate `--gui` process, so it
+# adds nothing to the tray/capture footprint while gaming.
+tao.workspace = true
+wry.workspace = true
+
+# windows-rs: only the feature namespaces we actually touch, to keep the
+# binary and compile surface small.
+[dependencies.windows]
+version = "0.62"        # 0.62.2, 2025-10-06 (verified docs.rs 2026-07-21)
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",  # SetUnhandledExceptionFilter + EXCEPTION_POINTERS live here
+    "Win32_System_Registry",  # run-at-startup toggle + toast AUMID registration
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_Audio",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",  # SetCurrentProcessExplicitAppUserModelID (toasts)
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
+    "Foundation_Metadata",
+    "Data_Xml_Dom",     # toast XML payload
+    "UI_Notifications", # WinRT toast notifications
+]
+
+# Embeds the app icon into the exe (Windows only).
+[build-dependencies]
+winresource = "0.1"

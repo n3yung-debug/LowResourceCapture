@@ -74,11 +74,17 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
-      - name: Compile installer
+      - name: Compile installers
         shell: pwsh
         run: |
+          # Two independent installers from one workspace build: the recorder
+          # and the offline VOD analyzer. Separate AppIds and install dirs, so
+          # either can be installed, upgraded, or removed without the other.
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           & "$iscc" "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\lowresourcecapture.iss"
+          if ($LASTEXITCODE -ne 0) { throw "recorder installer failed" }
+          & "$iscc" "/DMyAppVersion=${{ steps.ver.outputs.version }}" "installer\analyzer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "analyzer installer failed" }
 
       - name: Publish GitHub prerelease
         shell: pwsh
@@ -87,9 +93,12 @@ jobs:
         run: |
           $installer = "installer\Output\LowResourceCapture-Setup-${{ steps.ver.outputs.version }}.exe"
           if (-not (Test-Path $installer)) { throw "installer not found: $installer" }
+          $analyzer = "installer\Output\ClipAnalyzer-Setup-${{ steps.ver.outputs.version }}.exe"
+          if (-not (Test-Path $analyzer)) { throw "analyzer installer not found: $analyzer" }
           $relArgs = @(
             "${{ steps.ver.outputs.tag }}",
             "$installer",
+            "$analyzer",
             "--title", "LowResourceCapture ${{ steps.ver.outputs.tag }}",
             "--notes-file", ".github/release-notes-alpha.md",
             "--prerelease"

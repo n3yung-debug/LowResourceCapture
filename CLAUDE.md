@@ -69,17 +69,76 @@ minimal CPU/GPU/RAM.
     hardware HEVC MFT proves flaky on this GPU, fall back to the NVIDIA Video
     Codec SDK directly for encode. Decide empirically when layer 2 is built.
 
+## Workspace layout (since L6a, 2026-08-07)
+
+Cargo workspace, three crates, **two installers**:
+
+| crate | ships as | notes |
+|---|---|---|
+| `crates/recorder` | `LowResourceCapture-Setup-*.exe` | the tray recorder; `opt-level = "z"` |
+| `crates/analyzer` | `ClipAnalyzer-Setup-*.exe` | offline VOD analyzer; `opt-level = 3` |
+| `crates/shared` | (library) | config, logging, ffmpeg wrappers, clip editor |
+
+- **Why two installers:** the recorder is a tiny always-resident process tuned
+  for minimal footprint while gaming; the analyzer runs offline and is free to
+  use every core. Separate `AppId`s and install dirs — either installs,
+  upgrades, and uninstalls without the other.
+- Recorder modules keep their `crate::config::…` paths via a `pub use
+  shared::{clips, config, ffmpeg, logging};` re-export at the crate root.
+- The block-timeline editor lives in `shared` **on purpose** so the analyzer
+  opens the same editor rather than forking a second copy.
+
 ## Build
 
-`cargo test` (pure-Rust logic: ring buffer, game-detection) · `cargo run`
-(debug, console) · `cargo build --release` (windowed, size-optimized exe).
-Needs Rust MSVC toolchain + VS Build Tools (C++ workload).
+`cargo test --workspace` (pure-Rust logic: ring buffer, game-detection,
+analyzer event/profile logic) · `cargo run -p lowresourcecapture` (debug,
+console) · `cargo build --release` (both exes). Needs Rust MSVC toolchain + VS
+Build Tools (C++ workload).
 
 ## Layered build plan
 
 L1 foundation (done) → L2 WGC capture + NVENC HEVC encode → L3 WASAPI audio →
 L4 mp4 mux/save → L5 game auto-detect wiring, toast, live hotkey reload,
 run-at-startup. Each layer must `cargo build` on Nick's PC before the next.
+
+**L6 — VOD analyzer** (kills/deaths → clip timeline). L6a workspace split +
+second installer (done, this commit) → L6b detectors → L6c review UI with
+confirm/reject marking → L6d train/export → L6e ONNX inference.
+
+## Mistfall Hunter detection findings (VOD analysis 2026-08-07)
+
+Source: Nick's own Twitch VOD, 9:22, 1080p60, 14.7 Mbps, **stereo but
+effectively mono** (side channel 25–30 dB below mid). Burnt-in stream overlay:
+webcam bottom-left, follower alerts top-centre. Timestamps annotated by Nick.
+
+- **Death card — VERIFIED (n=1), the strong signal.** "YOU DIED" in red centred
+  text, gold **Spectate** / **Return to Camp** buttons at y≈0.90, screen
+  darkened, red vignette. Fixed position, large, unambiguous. Template match,
+  no ML.
+- **Player kill — VERIFIED (n=2).** Three correlates: a red enemy nameplate +
+  health bar (arbitrary screen position, 2D UI sprite); a gold particle burst;
+  and an **"F Loot" prompt at a fixed position** (x≈0.50, y≈0.58).
+- **The game has NO kill feed** (removed by patch; the game launched
+  2026-07-29 and is patching weekly). Third-party kills therefore have no HUD
+  artifact at all and are out of scope — detecting them would need scene
+  understanding.
+- **Kill audio sting — NOT DETECTABLE in this source. Two tests, both
+  negative.** Spectrogram cross-correlation between the two player kills scored
+  0.44 in tight 2s windows — *below* monster-kill pairs (0.455) and level with
+  unrelated controls (0.425). An earlier 8s-window result of 0.55 was an
+  artifact of matching **silence** (combat noise stopping ~2.5s after a kill),
+  not a shared sound. Mid/side separation is unavailable (near-mono source).
+  Audio is **off the critical path**; revisit only with a local recording
+  (game/mic on separate tracks) or a pristine reference from the game's assets.
+- **Gold burst as a player-vs-monster discriminator — INCONCLUSIVE, instrument
+  suspect.** A saturated-gold pixel-fraction sweep showed monster kills rising
+  *more* than player kills (0.55/0.73 vs 0.01/0.23), which contradicts the
+  frames — the burst is visibly present at both player kills. Most likely the
+  thresholds (`sat > 0.45`) reject pale-cream particles, and 4× downscaling
+  dilutes them further. **Re-measure before trusting either direction.**
+- **Profiles record the game build they were calibrated against** — a patched
+  HUD invalidates a profile exactly as a driver change invalidates a benchmark
+  ceiling. `GameProfile::is_stale()` enforces the flag.
 
 ## Confidence discipline for this repo
 

@@ -26,7 +26,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Build (debug)
-        run: cargo build
+        run: cargo build --workspace
 
       - name: Test (pure-Rust logic)
-        run: cargo test
+        run: cargo test --workspace

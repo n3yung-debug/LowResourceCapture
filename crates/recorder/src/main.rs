@@ -5,21 +5,22 @@
 
 mod audio;
 mod capture;
-mod clips;
-mod config;
 mod convert;
 mod encoder;
 mod engine;
-mod ffmpeg;
 mod game_detect;
 mod gui;
 mod hotkeys;
-mod logging;
 mod muxer;
 mod ringbuffer;
 mod startup;
 mod stats;
 mod toast;
+
+// Config, logging, the ffmpeg wrappers and the clip editor now live in the
+// `shared` crate so the analyzer can use them too. Re-exporting them at the
+// crate root keeps every existing `crate::config::…` path resolving unchanged.
+pub use shared::{clips, config, ffmpeg, logging};
 
 /// Custom thread message: settings GUI closed → reload config + hotkeys.
 const WM_RELOAD: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
