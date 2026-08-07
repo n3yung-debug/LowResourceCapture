@@ -148,6 +148,22 @@ webcam bottom-left, follower alerts top-centre. Timestamps annotated by Nick.
        cleanly at all five kills.
   - **Rule earned: derive pixel thresholds from the pixels, and keep the
     temporal baseline short enough that camera motion can't dominate.**
+- **Death card detector — VALIDATED over the full VOD (L6b, 2026-08-07).**
+  Gold button row at normalized `(0.250, 0.866, 0.500, 0.065)`. Sweeping all
+  1123 frames at 2 fps: card scores **0.443–0.500**, loudest non-death frame in
+  the other nine minutes **0.178**. Threshold 0.30, ~2.5× margin both ways; the
+  five top-scoring frames in the VOD are the death, in order. Calibrated on a
+  Twitch transcode — margin is wide enough to expect it carries to native
+  footage, but that is INFERENCE until tested.
+- **Enemy nameplate is NOT findable by colour — VERIFIED negative,
+  2026-08-07.** Strong-red pixel fraction with a plate on screen: 0.396% /
+  0.387%. Without one: 0.343% (monster fight) / 0.332% (traversal) / **0.433%
+  (matchmaking screen, no enemy at all)**. The largest red blob in every frame
+  is scene content — blood, embers, UI — never the plate, which is only
+  ~160–270 px. The game's palette is saturated with red, so colour carries no
+  information here. **The PvP gate needs structural template matching, not a
+  colour mask** — and it is now the hardest remaining piece, plausibly where a
+  trained model earns its place rather than hand-engineered features.
 - **Profiles record the game build they were calibrated against** — a patched
   HUD invalidates a profile exactly as a driver change invalidates a benchmark
   ceiling. `GameProfile::is_stale()` enforces the flag.
