@@ -67,12 +67,12 @@ pub fn run(video: &str) -> Result<()> {
         .context("creating review window")?;
 
     let ipc_proxy = proxy.clone();
-    let _webview = WebViewBuilder::new(&window)
+    let webview = WebViewBuilder::new()
         .with_html(REVIEW_HTML)
         .with_ipc_handler(move |req: wry::http::Request<String>| {
-            let _ = ipc_proxy.send_event(UserEvent::Ipc(req.into_body()));
+            let _ = ipc_proxy.send_event(UserEvent::Ipc(req.body().clone()));
         })
-        .build()
+        .build(&window)
         .context("creating review webview")?;
 
     let mut state = State { set, label_path, video: video.to_string(), duration };
@@ -85,7 +85,7 @@ pub fn run(video: &str) -> Result<()> {
             }
             WinEvent::UserEvent(UserEvent::Ipc(msg)) => state.handle(&msg, &proxy),
             WinEvent::UserEvent(UserEvent::Eval(js)) => {
-                let _ = _webview.evaluate_script(&js);
+                let _ = webview.evaluate_script(&js);
             }
             _ => {}
         }
