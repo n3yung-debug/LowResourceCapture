@@ -11,8 +11,12 @@ use serde::{Deserialize, Serialize};
 pub enum Kind {
     /// The local player died. Detected from the full-screen death card.
     Death,
-    /// The local player killed another player.
+    /// A player died on screen — the thing we ultimately want to detect.
     PlayerKill,
+    /// A monster died on screen. Recorded as an explicit **negative**: the
+    /// particle burst fires identically for these, so a classifier that never
+    /// sees them has no way to learn the distinction that matters.
+    MonsterKill,
 }
 
 /// One detection, at `at` seconds into the source video.

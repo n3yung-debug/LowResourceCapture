@@ -63,6 +63,7 @@
     <button class="n" onclick="verdict(false)">✕ Reject <kbd>N</kbd></button>
     <button onclick="mark('playerkill')">+ Kill here <kbd>K</kbd></button>
     <button onclick="mark('death')">+ Death here <kbd>D</kbd></button>
+    <button onclick="mark('monsterkill')">+ Monster here <kbd>M</kbd></button>
     <button onclick="exportClips()">Export confirmed → clip</button>
     <div id="keys">
       <kbd>←</kbd><kbd>→</kbd> prev/next detection · <kbd>Space</kbd> play/pause ·
@@ -109,11 +110,14 @@
       return `<div class="ev ${i === sel ? "sel" : ""}" onclick="select(${i})">
         <span class="dot ${s}"></span>
         <span class="t">${fmt(l.at)}</span>
-        <span class="k">${l.kind === "playerkill" ? "Player kill" : "Death"}</span>
+        <span class="k">${kindName(l.kind)}</span>
         ${l.origin === "manual" ? '<span class="man">manual</span>' : ""}
       </div>`;
     }).join("");
   }
+
+  const kindName = k =>
+    k === "playerkill" ? "Player kill" : k === "monsterkill" ? "Monster kill" : "Death";
 
   function fmt(s) {
     const m = Math.floor(s / 60), r = Math.floor(s % 60);
@@ -125,7 +129,7 @@
     sel = i; render();
     const l = data.labels[i];
     document.getElementById("where").textContent =
-      `${l.kind === "playerkill" ? "Player kill" : "Death"} at ${fmt(l.at)}`;
+      `${kindName(l.kind)} at ${fmt(l.at)}`;
     // Start a few seconds early so the event has context, then play.
     msg("");
     v.currentTime = Math.max(0, l.at - 5);
@@ -185,6 +189,7 @@
     else if (k === "n") verdict(false);
     else if (k === "k") mark("playerkill");
     else if (k === "d") mark("death");
+    else if (k === "m") mark("monsterkill");
     else if (e.key === "ArrowLeft") select(sel - 1);
     else if (e.key === "ArrowRight") select(sel + 1);
     else if (e.key === " ") { e.preventDefault(); v.paused ? v.play() : v.pause(); }

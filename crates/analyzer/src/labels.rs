@@ -24,11 +24,53 @@ pub enum Origin {
     Manual,
 }
 
+/// A box drawn around something in the frame, normalized 0..=1 so it survives
+/// the source resolution changing — the same reason detection regions are.
+///
+/// `class` is free-form so new things can be boxed without a schema change:
+/// "nameplate" today, whatever the next detector needs later.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BBox {
+    pub class: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl BBox {
+    /// Clamp to the frame and normalize a box drawn in any direction, so a
+    /// right-to-left drag is the same box as left-to-right.
+    pub fn from_drag(class: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
+        let (lx, rx) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+        let (ty, by) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+        let lx = lx.clamp(0.0, 1.0);
+        let ty = ty.clamp(0.0, 1.0);
+        Self {
+            class: class.to_string(),
+            x: lx,
+            y: ty,
+            w: (rx.clamp(0.0, 1.0) - lx).max(0.0),
+            h: (by.clamp(0.0, 1.0) - ty).max(0.0),
+        }
+    }
+
+    /// A box with no area is a stray click, not an annotation.
+    pub fn is_usable(&self) -> bool {
+        self.w > 0.001 && self.h > 0.001
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Label {
     pub kind: Kind,
     pub at: f64,
     pub origin: Origin,
+    /// Boxes drawn on the frame at `at`. Empty for a timestamp-only mark —
+    /// which is still a valid training example for the event classifier, just
+    /// not for the object detector.
+    #[serde(default)]
+    pub boxes: Vec<BBox>,
     /// `None` = not yet reviewed. `Some(false)` is a real datum (a confirmed
     /// false positive), not an absence — it is what teaches a model precision.
     pub confirmed: Option<bool>,
@@ -100,6 +142,7 @@ impl LabelSet {
                         kind: det.kind,
                         at: det.at,
                         origin: Origin::Detected,
+                        boxes: Vec::new(),
                         confirmed: None,
                         score: det.score,
                     });
@@ -117,6 +160,7 @@ impl LabelSet {
             kind,
             at,
             origin: Origin::Manual,
+            boxes: Vec::new(),
             confirmed: Some(true),
             score: 1.0,
         });
@@ -272,6 +316,44 @@ mod tests {
         s.labels[0].confirmed = Some(true);
         assert_eq!(s.pending().len(), 1);
         assert_eq!(s.pending()[0].at, 400.0);
+    }
+
+    #[test]
+    fn a_box_drawn_backwards_is_the_same_box() {
+        let a = BBox::from_drag("nameplate", 0.2, 0.3, 0.5, 0.6);
+        let b = BBox::from_drag("nameplate", 0.5, 0.6, 0.2, 0.3);
+        assert_eq!(a, b, "dragging right-to-left must not produce a negative box");
+        assert!((a.w - 0.3).abs() < 1e-9 && (a.h - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_box_is_clamped_to_the_frame() {
+        let b = BBox::from_drag("nameplate", -0.5, -0.5, 1.5, 1.5);
+        assert_eq!((b.x, b.y, b.w, b.h), (0.0, 0.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn a_stray_click_is_not_an_annotation() {
+        assert!(!BBox::from_drag("nameplate", 0.5, 0.5, 0.5, 0.5).is_usable());
+        assert!(BBox::from_drag("nameplate", 0.40, 0.40, 0.44, 0.43).is_usable());
+    }
+
+    #[test]
+    fn monster_kills_are_a_distinct_negative_class() {
+        let mut s = set();
+        s.mark(Kind::PlayerKill, 100.0);
+        s.mark(Kind::MonsterKill, 100.0);
+        assert_eq!(s.labels.len(), 2, "a monster death at the same moment is its own datum");
+        assert_ne!(s.labels[0].kind, s.labels[1].kind);
+    }
+
+    #[test]
+    fn boxes_survive_a_rescan() {
+        let mut s = set();
+        s.mark(Kind::PlayerKill, 100.0);
+        s.labels[0].boxes.push(BBox::from_drag("nameplate", 0.4, 0.3, 0.45, 0.33));
+        s.merge_detections(vec![det(Kind::PlayerKill, 100.2, 0.9)], 3.0);
+        assert_eq!(s.labels[0].boxes.len(), 1, "boxes are the expensive input — never lose them");
     }
 
     #[test]
