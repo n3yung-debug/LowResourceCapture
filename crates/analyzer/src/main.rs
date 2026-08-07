@@ -9,13 +9,12 @@
 //! NVIDIA recordings). It does not record anything itself — the recorder's
 //! in-RAM ring buffer design is untouched by any of this.
 //!
-//! Detection status as of this commit: **skeleton only.** The event model and
-//! profile format below are real and tested; the detectors are not written yet.
+//! Detection status: the death card is detected and validated; player kills are
+//! marked by hand in the review window (see CLAUDE.md for why).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// The event model and profile format are exercised by their unit tests but not
-// yet wired into a detector, so every item reads as dead code. Remove this once
-// L6b calls into them.
+// Parts of the profile format are exercised by unit tests but not yet read by a
+// detector. Remove this once the kill detector consumes them.
 #![allow(dead_code)]
 
 mod detect;
@@ -24,39 +23,66 @@ mod frames;
 mod labels;
 mod profile;
 mod review;
+mod winui;
 
 use anyhow::Result;
 
-fn main() -> Result<()> {
+fn main() {
+    init_logging();
+    if let Err(e) = run() {
+        // No console in a windowed build, so an error has to be shown or it is
+        // invisible — the app would simply appear not to start.
+        log::error!("{e:#}");
+        winui::error(&format!("{e:#}"));
+        std::process::exit(1);
+    }
+}
+
+fn init_logging() {
+    let path = shared::config::install_dir()
+        .map(|d| d.join("logs").join("clipanalyzer.log"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("clipanalyzer.log"));
+    shared::logging::init(&path, false);
+}
+
+fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("clipanalyzer {}", env!("CARGO_PKG_VERSION"));
+        winui::info(&format!("ClipAnalyzer {}", env!("CARGO_PKG_VERSION")));
         return Ok(());
     }
 
-    if args.iter().any(|a| a == "--help" || a == "-h") || args.is_empty() {
-        eprintln!(
-            "clipanalyzer {}\n\
-             \n\
-             Usage: clipanalyzer <video-file> [--scan-only]\n\
-             \n\
-             Scans a recording for deaths, then opens a review window where you\n\
-             confirm or reject each one and mark any it missed. Verdicts are\n\
-             saved beside the video as <video>.labels.json and survive re-scans,\n\
-             so a re-tuned detector never costs you a review.\n\
-             \n\
-             Only death detection exists so far. Player kills have to be marked\n\
-             by hand (press K at the moment) — those marks are what a kill\n\
-             detector will eventually be trained on.\n\
-             \n\
-               --scan-only   scan and print, don't open the review window",
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        winui::info(&format!(
+            "ClipAnalyzer {}\n\n\
+             Usage: clipanalyzer [video-file] [--scan-only]\n\n\
+             Run it with no arguments and it asks you to choose a recording.\n\n\
+             It scans for deaths, then opens a review window where you confirm \
+             or reject each one and mark any it missed. Verdicts save beside the \
+             video as <video>.labels.json and survive re-scans, so a re-tuned \
+             detector never costs you a review.\n\n\
+             Only death detection exists so far — player kills are marked by hand \
+             (press K at the moment), and those marks are what a kill detector \
+             will eventually be trained on.",
             env!("CARGO_PKG_VERSION")
-        );
+        ));
         return Ok(());
     }
 
-    let input = &args[0];
+    // Launched from the Start Menu or desktop shortcut there are no arguments,
+    // so ask for a file rather than exiting silently.
+    let positional = args.iter().find(|a| !a.starts_with("--"));
+    let input = match positional {
+        Some(p) => p.clone(),
+        None => match winui::pick_video() {
+            Some(p) => p,
+            None => return Ok(()), // cancelled
+        },
+    };
+    let input = &input;
+    log::info!("analyzing {input}");
+
     if !std::path::Path::new(input).exists() {
         anyhow::bail!("no such file: {input}");
     }

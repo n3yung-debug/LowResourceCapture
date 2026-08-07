@@ -26,5 +26,15 @@ toml.workspace = true
 tao.workspace = true
 wry.workspace = true
 
+# A windowed build has no console, so the file picker and error reporting have
+# to be real windows. Only the two namespaces that needs.
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_UI_Controls_Dialogs",     # GetOpenFileNameW
+    "Win32_UI_WindowsAndMessaging",  # MessageBoxW
+]
+
 [build-dependencies]
 winresource = "0.1"
