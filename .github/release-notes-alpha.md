@@ -1,4 +1,24 @@
-## alpha: a second app — ClipAnalyzer 🔍
+## alpha: ClipAnalyzer actually launches now 🔍
+
+### Fixed: the analyzer did nothing when you double-clicked it
+`clipanalyzer.exe` is a windowed build, so it has no console — and its shortcut
+launched it with no arguments, which hit a "print usage and exit" path. The
+usage text went to a stderr that doesn't exist, so the app just vanished.
+
+- **No arguments now opens a file picker** instead of exiting.
+- **Errors show a message box** as well as logging. Before this, any failure was
+  indistinguishable from "it doesn't start".
+- **The analyzer writes a log at all** now — `<install>\logs\clipanalyzer.log`.
+  It previously never initialized logging, so there was nothing to inspect.
+
+### Known gap
+If a scan finds **zero** detections, the review window opens with no video
+loaded, so there's nothing to scrub and you can't hand-mark anything. That
+matters for a VOD with kills but no deaths. Being fixed separately.
+
+---
+
+## Everything below shipped in 0.1.23 — a second app 🔍
 
 **This release ships two installers.** The recorder is unchanged in behaviour;
 the new one is an offline tool that scans a recording for deaths, lets you
