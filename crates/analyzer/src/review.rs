@@ -13,12 +13,15 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::borrow::Cow;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use tao::dpi::LogicalSize;
 use tao::event::{Event as WinEvent, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::window::WindowBuilder;
+use wry::http::{Request, Response};
 use wry::WebViewBuilder;
 
 use crate::event::Kind;
@@ -26,9 +29,76 @@ use crate::labels::LabelSet;
 
 const REVIEW_HTML: &str = include_str!("review.html");
 
-/// Seconds either side of an event shown in the preview.
+/// Seconds either side of an event when building clips from confirmed events.
 const PRE: f64 = 12.0;
 const POST: f64 = 4.0;
+
+/// Bytes served per range request. Big enough that seeking isn't chatty, small
+/// enough that a 1 GB VOD never lands in memory.
+const CHUNK: u64 = 4 * 1024 * 1024;
+
+/// Serve the source video over a custom protocol with HTTP range support.
+///
+/// This is what makes the window usable on a recording where **nothing was
+/// detected** — which is the common case, since you extract far more often than
+/// you die. The `<video>` element seeks natively against the original file, so
+/// there is no transcode, no wait, and scrubbing works whether the scan found
+/// anything or not.
+fn serve_range(path: &Path, range: Option<&str>) -> Response<Cow<'static, [u8]>> {
+    let fail = |code: u16| {
+        Response::builder()
+            .status(code)
+            .body(Cow::Owned(Vec::new()))
+            .unwrap_or_else(|_| Response::new(Cow::Owned(Vec::new())))
+    };
+
+    let Ok(meta) = std::fs::metadata(path) else { return fail(404) };
+    let total = meta.len();
+    if total == 0 {
+        return fail(404);
+    }
+
+    // "bytes=START-[END]". An absent header is treated as "from the start",
+    // which is what Chromium's media stack asks for first anyway.
+    let (start, end) = match range.and_then(|r| r.strip_prefix("bytes=")) {
+        Some(spec) => {
+            let mut parts = spec.splitn(2, '-');
+            let s: u64 = parts.next().unwrap_or("").trim().parse().unwrap_or(0);
+            let e = parts
+                .next()
+                .and_then(|e| e.trim().parse::<u64>().ok())
+                .unwrap_or(s + CHUNK - 1);
+            (s, e.min(total - 1))
+        }
+        None => (0, (CHUNK - 1).min(total - 1)),
+    };
+    if start >= total {
+        return fail(416);
+    }
+    let end = end.max(start).min(start + CHUNK - 1).min(total - 1);
+    let len = end - start + 1;
+
+    let mut buf = vec![0u8; len as usize];
+    let read = std::fs::File::open(path)
+        .and_then(|mut f| {
+            f.seek(SeekFrom::Start(start))?;
+            f.read_exact(&mut buf)?;
+            Ok(())
+        })
+        .is_ok();
+    if !read {
+        return fail(500);
+    }
+
+    Response::builder()
+        .status(206)
+        .header("Content-Type", "video/mp4")
+        .header("Accept-Ranges", "bytes")
+        .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+        .header("Content-Length", len.to_string())
+        .body(Cow::Owned(buf))
+        .unwrap_or_else(|_| fail(500))
+}
 
 enum UserEvent {
     Ipc(String),
@@ -67,9 +137,18 @@ pub fn run(video: &str) -> Result<()> {
         .context("creating review window")?;
 
     let ipc_proxy = proxy.clone();
+    let served = PathBuf::from(video);
     let webview = WebViewBuilder::new()
         .with_html(REVIEW_HTML)
-        .with_ipc_handler(move |req: wry::http::Request<String>| {
+        .with_custom_protocol("vod".into(), move |_id, req: Request<Vec<u8>>| {
+            let range = req
+                .headers()
+                .get("Range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            serve_range(&served, range.as_deref())
+        })
+        .with_ipc_handler(move |req: Request<String>| {
             let _ = ipc_proxy.send_event(UserEvent::Ipc(req.body().clone()));
         })
         .build(&window)
@@ -111,25 +190,6 @@ impl State {
         match m.cmd.as_str() {
             "load" => self.push(proxy, "reviewData"),
 
-            // Build a preview of just this event's window, off the UI thread.
-            "clip" => {
-                let Some(l) = self.set.labels.get(m.index) else { return };
-                let start = (l.at - PRE).max(0.0);
-                let dur = (PRE + POST).min((self.duration - start).max(1.0));
-                let video = self.video.clone();
-                let p = proxy.clone();
-                std::thread::spawn(move || {
-                    let js = match shared::ffmpeg::preview_range_data_uri(
-                        &video, start, dur, 720, 26,
-                    ) {
-                        Some(uri) => format!("window.clipReady({})", js_str(&uri)),
-                        None => "window.clipError('Could not build a preview for this window.')"
-                            .to_string(),
-                    };
-                    let _ = p.send_event(UserEvent::Eval(js));
-                });
-            }
-
             "verdict" => {
                 if let Some(l) = self.set.labels.get_mut(m.index) {
                     l.confirmed = Some(m.ok);
@@ -159,12 +219,17 @@ impl State {
         #[derive(serde::Serialize)]
         struct Payload<'a> {
             video: &'a str,
+            /// Served by the custom protocol above; the page seeks against it.
+            url: &'a str,
+            duration: f64,
             pre: f64,
             post: f64,
             labels: &'a [crate::labels::Label],
         }
         let payload = Payload {
             video: &self.video,
+            url: "http://vod.localhost/source",
+            duration: self.duration,
             pre: PRE,
             post: POST,
             labels: &self.set.labels,

@@ -61,8 +61,8 @@
     <button onclick="mark('death')">+ Death here <kbd>D</kbd></button>
     <button onclick="exportClips()">Export confirmed → clip</button>
     <div id="keys">
-      <kbd>←</kbd><kbd>→</kbd> prev/next · <kbd>Space</kbd> play/pause ·
-      marks land at the playhead, so scrub to the exact moment first
+      <kbd>←</kbd><kbd>→</kbd> prev/next detection · <kbd>Space</kbd> play/pause ·
+      scrub the video freely — marks land at the playhead
     </div>
   </div>
 </div>
@@ -70,19 +70,25 @@
 <script>
   const send = m => window.ipc.postMessage(JSON.stringify(m));
   const v = document.getElementById("v");
-  let data = { labels: [], video: "", pre: 12, post: 4 };
-  let sel = -1, winStart = 0;
+  let data = { labels: [], video: "", url: "", duration: 0, pre: 12, post: 4 };
+  let sel = -1;
 
   window.reviewData = d => {
     data = d;
     document.getElementById("vid").textContent = d.video.split(/[\\/]/).pop();
+    // The whole video is served with range support, so it loads once and seeks
+    // natively. That matters most when the scan found NOTHING — you still get
+    // a scrubbable video to mark kills on, which is the usual case.
+    if (v.src !== d.url) v.src = d.url;
     render();
     if (d.labels.length) {
       // Open on the first thing still awaiting a verdict — that's the queue.
       const i = d.labels.findIndex(l => l.confirmed === null);
       select(i >= 0 ? i : 0);
     } else {
-      msg("No detections. Scrub the video and press K or D to mark events by hand.");
+      msg("Nothing detected — scrub to a kill and press K to mark it.");
+      document.getElementById("where").textContent =
+        "No detections. Scrub freely; K and D mark at the playhead.";
     }
   };
 
@@ -113,22 +119,18 @@
     if (i < 0 || i >= data.labels.length) return;
     sel = i; render();
     const l = data.labels[i];
-    winStart = Math.max(0, l.at - data.pre);
     document.getElementById("where").textContent =
-      `${l.kind === "playerkill" ? "Player kill" : "Death"} at ${fmt(l.at)} — showing ${fmt(winStart)} onward`;
-    v.removeAttribute("src"); v.load();
-    msg("building preview…");
-    send({ cmd: "clip", index: i });
+      `${l.kind === "playerkill" ? "Player kill" : "Death"} at ${fmt(l.at)}`;
+    // Start a few seconds early so the event has context, then play.
+    msg("");
+    v.currentTime = Math.max(0, l.at - 5);
+    v.play().catch(() => {});
   }
 
-  window.clipReady = uri => {
-    msg("");
-    v.src = uri;
-    // Jump to the event itself; the window starts pre-roll seconds earlier.
-    v.currentTime = Math.min(data.pre, 5);
-    v.play().catch(() => {});
-  };
   window.clipError = m => msg(m);
+  v.addEventListener("error", () => msg(
+    "Could not play this video. If it's HEVC, WebView2 may not decode it — " +
+    "H.264 sources (Twitch VODs, OBS defaults) work."));
 
   // The label list is rebuilt from Rust after every change, so the UI can never
   // drift from what's actually on disk.
@@ -142,9 +144,9 @@
   }
 
   function mark(kind) {
-    // Playhead position within the preview window, mapped back to source time.
-    const at = winStart + (v.currentTime || 0);
-    send({ cmd: "mark", kind, at });
+    // The video IS the source, so the playhead is already source time — no
+    // window offset to get wrong.
+    send({ cmd: "mark", kind, at: v.currentTime || 0 });
   }
 
   function exportClips() { send({ cmd: "export" }); }
