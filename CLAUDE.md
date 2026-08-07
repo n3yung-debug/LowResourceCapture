@@ -182,6 +182,59 @@ webcam bottom-left, follower alerts top-centre. Timestamps annotated by Nick.
   HUD invalidates a profile exactly as a driver change invalidates a benchmark
   ceiling. `GameProfile::is_stale()` enforces the flag.
 
+## Local recording, second sample (2026-08-07 continued)
+
+Nick's own OBS-side local capture of his stream output — **not a
+LowResourceCapture recording**. H.264 in an MKV container (`.mp4` extension,
+misleading), 2560×1440 native, 5 AAC audio tracks (2 live at ~-42/-45 dB mean,
+3 pure digital silence at -91 dB). The 5 tracks are an artifact of Nick's OBS
+multitrack setup, not of LowResourceCapture's 2-track design — noted so a
+future session doesn't mistake this for what the recorder itself produces.
+
+**Critical scope correction, established through image review, not assumed:**
+this footage is **Training Room combat against practice dummies, not live
+matches.** Confirmed visually — "Total Damage / Progress Record" panel, "F1
+Training Room Settings" label, no minimap, no "Safe Phase" timer — all absent
+from the live-match Twitch VOD's HUD. Caught by actually looking at the
+frames rather than trusting the annotation's "player"/"monster" wording at
+face value.
+
+- **Nick confirms (2026-08-07): the training dummy IS the "Mercenary" class
+  from real PvP, and kill VFX — including the gold particle burst — are
+  pixel-identical to a live kill.** Known differences: no minimap, and dummy
+  behavior is "too consistent" (i.e., less varied than a live opponent).
+  Loot-prompt behavior is unaffected — the game has no physical ground loot at
+  all, training or otherwise. **This means client-side VISUAL kill signals
+  (the gold burst, general hit VFX) generalize from this footage — VERIFIED
+  by Nick, not inferred.**
+- **Audio does NOT get the same pass, and this is a deliberate, reasoned
+  hedge, not caution for its own sake.** Particle VFX are client-side and fire
+  identically whether or not a server-confirmed kill happened. A dummy has no
+  real elimination to confirm, so if Mistfall Hunter's kill sting (if one
+  exists) is tied to a server-side kill-credit event rather than the hit
+  itself, a dummy kill would legitimately produce silence where a live PvP
+  kill would not — with no contradiction. Nick vouched for the particles
+  explicitly; he did not vouch for the audio, and I'm not extending his
+  confirmation past what he said.
+- **Kill-sting search, native audio, n=3 (up from n=2 on the Twitch source) —
+  NEGATIVE, on both live tracks independently.** Same validated method (tight
+  2s windows, per-bin-whitened spectrogram cross-correlation, 0.17s run) run
+  against three player-kill instants (9s, 31s, 109s) and two monster-kill
+  instants (20s, 88s). Player~player pairs scored 0.517–0.545 on both tracks
+  — *below* random unrelated control-pair scores (up to 0.681 on track 1,
+  0.664 on track 2). **What this DOES settle:** the earlier Twitch-VOD null
+  result was not a compression artifact — the same blind-search method finds
+  nothing on genuinely clean, native, un-transcoded audio either, mic
+  confirmed literally silent (not just quiet — Nick didn't speak, and the
+  presumed-mic track shows no speech-shaped content). **What this does NOT
+  settle:** whether a live PvP kill has a server-triggered sting a dummy kill
+  never fires — per the hedge above, this file structurally cannot test that.
+  A recording of actual live-match kills is still the only thing that can
+  close this question either way.
+- **Death-card threshold: still untested on native/1440p footage.** This
+  sample contains no death, so the 0.443–0.500 vs 0.178 margin measured on
+  the Twitch VOD remains INFERENCE-carries-to-native, not verified.
+
 ## Confidence discipline for this repo
 
 Nothing touching `windows-rs` is VERIFIED until it compiles/runs on Nick's
