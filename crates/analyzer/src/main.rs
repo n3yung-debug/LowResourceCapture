@@ -18,7 +18,9 @@
 // L6b calls into them.
 #![allow(dead_code)]
 
+mod detect;
 mod event;
+mod frames;
 mod profile;
 
 use anyhow::Result;
@@ -59,9 +61,44 @@ fn main() -> Result<()> {
         );
     }
 
-    match shared::ffmpeg::duration_secs(input) {
-        Some(d) => println!("{input}: {d:.2}s — readable, detection not implemented yet"),
-        None => anyhow::bail!("could not read a duration from {input}"),
+    let duration = shared::ffmpeg::duration_secs(input)
+        .ok_or_else(|| anyhow::anyhow!("could not read a duration from {input}"))?;
+    let (w, h) = frames::dimensions(input)
+        .ok_or_else(|| anyhow::anyhow!("could not read video dimensions from {input}"))?;
+    println!("{input}: {w}x{h}, {duration:.1}s — scanning for deaths…");
+
+    let started = std::time::Instant::now();
+    let mut stream =
+        frames::RoiStream::open(input, &detect::DEATH_ROI, w, h, detect::SAMPLE_FPS)?;
+    let mut buf = Vec::new();
+    let mut hits = Vec::new();
+    let mut scanned = 0u64;
+    while let Some(at) = stream.next_frame(&mut buf)? {
+        scanned += 1;
+        if let Some(ev) = detect::score_frame(&buf, at) {
+            hits.push(ev);
+        }
+    }
+
+    // A death card is on screen for seconds, so one death produces a run of
+    // detections. Collapse each run into a single event.
+    let deaths = event::cluster(hits, 3.0);
+    let segs = event::segments(&deaths, 12.0, 4.0, duration);
+
+    println!(
+        "scanned {scanned} frames in {:.1}s — {} death(s)",
+        started.elapsed().as_secs_f64(),
+        deaths.len()
+    );
+    for (ev, (s, e)) in deaths.iter().zip(segs.iter()) {
+        println!(
+            "  death at {:>8.1}s  (confidence {:.2})  clip {:.1}s–{:.1}s",
+            ev.at, ev.score, s, e
+        );
+    }
+    if deaths.is_empty() {
+        println!("  nothing found — if you know there's a death here, the profile may be \
+                  stale against the current game build");
     }
 
     Ok(())

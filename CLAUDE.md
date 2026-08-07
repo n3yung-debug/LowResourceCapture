@@ -130,12 +130,24 @@ webcam bottom-left, follower alerts top-centre. Timestamps annotated by Nick.
   not a shared sound. Mid/side separation is unavailable (near-mono source).
   Audio is **off the critical path**; revisit only with a local recording
   (game/mic on separate tracks) or a pristine reference from the game's assets.
-- **Gold burst as a player-vs-monster discriminator — INCONCLUSIVE, instrument
-  suspect.** A saturated-gold pixel-fraction sweep showed monster kills rising
-  *more* than player kills (0.55/0.73 vs 0.01/0.23), which contradicts the
-  frames — the burst is visibly present at both player kills. Most likely the
-  thresholds (`sat > 0.45`) reject pale-cream particles, and 4× downscaling
-  dilutes them further. **Re-measure before trusting either direction.**
+- **Gold burst does NOT discriminate player kills from monster kills —
+  RESOLVED 2026-08-07, n=5.** Warm-particle rise: players 3.1 / 13.2 · monsters
+  4.5 / 10.8 / **21.1**. The largest burst in the sample is a monster kill and
+  the smallest is a player kill; the ranges overlap completely. It is a *death*
+  effect (anything dying drops loot), not a PvP one. Still useful as a cheap
+  high-recall "something died" candidate generator — but **the red player
+  nameplate must carry PvP discrimination.**
+  - Took three attempts; the first two were instrument failures, worth
+    remembering as a method warning:
+    1. Guessed colour thresholds (`sat > 0.45`) — missed a burst plainly
+       visible in the frame, and 4× downscale diluted the particles further.
+    2. Diffed against a baseline 2.5s earlier — in a game with a moving camera
+       that measures *camera motion*, not particles. Its "appeared" pixels were
+       neutral grey (R−B = +4) across 15% of the frame.
+    3. Tight 0.3s baseline + a warmth requirement (R−B > 30) — works, fires
+       cleanly at all five kills.
+  - **Rule earned: derive pixel thresholds from the pixels, and keep the
+    temporal baseline short enough that camera motion can't dominate.**
 - **Profiles record the game build they were calibrated against** — a patched
   HUD invalidates a profile exactly as a driver change invalidates a benchmark
   ceiling. `GameProfile::is_stale()` enforces the flag.

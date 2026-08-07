@@ -1,0 +1,60 @@
+# Detection profile — Mistfall Hunter.
+#
+# Calibrated from a 1080p60 Twitch VOD on 2026-08-07. Regions are normalized
+# (0..1), so they carry to 1440p without a resolution switch.
+#
+# CAVEAT: calibrated against a *Twitch transcode* with a burnt-in stream
+# overlay, not a native local recording. The death-card threshold has plenty of
+# margin (0.44 vs 0.18) so it should carry, but treat anything tighter as
+# pending validation on native footage.
+
+game = "Mistfall Hunter"
+folders = ["MistfallHunter", "Mistfall Hunter"]
+
+# The game launched 2026-07-29 and is patching weekly — it has already removed
+# its kill feed. When the HUD moves, this profile is stale and must say so
+# rather than silently finding nothing.
+calibrated_against = "2026.08.06"
+calibrated_height = 1080
+
+pre_roll = 12.0
+post_roll = 4.0
+cluster_window = 3.0
+
+# Burnt-in stream overlay from the calibration source. A native recording has
+# none of these — harmless to keep, since they only ever suppress regions.
+#
+# Webcam, bottom left.
+[[exclude.regions]]
+x = 0.031
+y = 0.685
+w = 0.229
+h = 0.250
+
+# Stream info banner along the bottom.
+[[exclude.regions]]
+x = 0.008
+y = 0.935
+w = 0.279
+h = 0.046
+
+# Minimap, top right — warm parchment tones that read as gold.
+[[exclude.regions]]
+x = 0.802
+y = 0.023
+w = 0.177
+h = 0.204
+
+# Ability icons, bottom right.
+[[exclude.regions]]
+x = 0.797
+y = 0.870
+w = 0.203
+h = 0.111
+
+# Player card, top left.
+[[exclude.regions]]
+x = 0.018
+y = 0.014
+w = 0.289
+h = 0.093
