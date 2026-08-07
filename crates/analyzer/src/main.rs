@@ -94,60 +94,34 @@ fn run() -> Result<()> {
         );
     }
 
-    let duration = shared::ffmpeg::duration_secs(input)
-        .ok_or_else(|| anyhow::anyhow!("could not read a duration from {input}"))?;
-    let (w, h) = frames::dimensions(input)
-        .ok_or_else(|| anyhow::anyhow!("could not read video dimensions from {input}"))?;
-    println!("{input}: {w}x{h}, {duration:.1}s — scanning for deaths…");
-
-    let started = std::time::Instant::now();
-    let mut stream =
-        frames::RoiStream::open(input, &detect::DEATH_ROI, w, h, detect::SAMPLE_FPS)?;
-    let mut buf = Vec::new();
-    let mut hits = Vec::new();
-    let mut scanned = 0u64;
-    while let Some(at) = stream.next_frame(&mut buf)? {
-        scanned += 1;
-        if let Some(ev) = detect::score_frame(&buf, at) {
-            hits.push(ev);
-        }
-    }
-
-    // A death card is on screen for seconds, so one death produces a run of
-    // detections. Collapse each run into a single event.
-    let deaths = event::cluster(hits, 3.0);
-
-    println!(
-        "scanned {scanned} frames in {:.1}s — {} death(s)",
-        started.elapsed().as_secs_f64(),
-        deaths.len()
-    );
-
-    // Fold into the label set beside the video, keeping any verdicts already
-    // recorded. Re-running a re-tuned detector must never cost you a review.
-    let label_path = review::label_path_for(input);
-    let mut set = if label_path.exists() {
-        labels::LabelSet::load(&label_path)?
-    } else {
-        labels::LabelSet::new(input, "")
-    };
-    let added = set.merge_detections(deaths, 3.0);
-    set.save(&label_path)?;
-
-    let (ok, no, pending) = set.tally();
-    println!(
-        "labels: {added} new, {ok} confirmed, {no} rejected, {pending} awaiting review \
-         -> {}",
-        label_path.display()
-    );
-
-    // Hand straight over to the review window — judging the detections is the
-    // point, and every verdict made there is also a training example.
+    // Console mode: scan and print, no window.
     if args.iter().any(|a| a == "--scan-only") {
-        for ev in set.confirmed() {
-            println!("  {:?} at {:>8.1}s", ev.kind, ev.at);
-        }
+        let started = std::time::Instant::now();
+        let deaths = detect::scan_deaths(input, |_| {})?;
+        println!(
+            "scanned in {:.1}s — {} death(s)",
+            started.elapsed().as_secs_f64(),
+            deaths.len()
+        );
+
+        let label_path = review::label_path_for(input);
+        let mut set = if label_path.exists() {
+            labels::LabelSet::load(&label_path)?
+        } else {
+            labels::LabelSet::new(input, "")
+        };
+        let added = set.merge_detections(deaths, 3.0);
+        set.save(&label_path)?;
+        let (ok, no, pending) = set.tally();
+        println!(
+            "labels: {added} new, {ok} confirmed, {no} rejected, {pending} pending -> {}",
+            label_path.display()
+        );
         return Ok(());
     }
+
+    // Otherwise open the window straight away and scan behind it. Scanning
+    // first meant the app sat invisible for the length of a decode, which is
+    // indistinguishable from never starting.
     review::run(input)
 }

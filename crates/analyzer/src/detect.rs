@@ -9,7 +9,9 @@
 //! on screen, and the loudest non-death frame in the other nine minutes scores
 //! 0.178. A threshold of 0.30 sits in the gap with ~2.5x margin either way.
 
-use crate::event::{Event, Kind};
+use anyhow::{anyhow, Result};
+
+use crate::event::{self, Event, Kind};
 use crate::profile::Region;
 
 /// Where the Spectate / Return-to-Camp button row sits, normalized.
@@ -54,6 +56,34 @@ pub fn score_frame(rgb: &[u8], at: f64) -> Option<Event> {
     }
     let headroom = ((f - DEATH_THRESHOLD) / (0.45 - DEATH_THRESHOLD)).clamp(0.0, 1.0);
     Some(Event::new(Kind::Death, at, 0.5 + 0.5 * headroom))
+}
+
+/// Scan a whole recording for death cards, reporting progress as it goes.
+///
+/// Runs on a worker thread — the review window opens first and this fills it
+/// in. Decoding even a 9-minute 1080p60 file takes long enough that doing it
+/// before showing any UI makes the app look like it never started.
+pub fn scan_deaths(input: &str, mut on_progress: impl FnMut(f64)) -> Result<Vec<Event>> {
+    let (w, h) = crate::frames::dimensions(input)
+        .ok_or_else(|| anyhow!("could not read video dimensions from {input}"))?;
+    let duration = shared::ffmpeg::duration_secs(input).unwrap_or(0.0);
+
+    let mut stream = crate::frames::RoiStream::open(input, &DEATH_ROI, w, h, SAMPLE_FPS)?;
+    let mut buf = Vec::new();
+    let mut hits = Vec::new();
+    while let Some(at) = stream.next_frame(&mut buf)? {
+        if let Some(ev) = score_frame(&buf, at) {
+            hits.push(ev);
+        }
+        if duration > 0.0 {
+            on_progress((at / duration).clamp(0.0, 1.0));
+        }
+    }
+    on_progress(1.0);
+
+    // A death card is on screen for seconds, so one death produces a run of
+    // detections. Collapse each run into a single event.
+    Ok(event::cluster(hits, 3.0))
 }
 
 #[cfg(test)]

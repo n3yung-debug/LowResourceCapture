@@ -103,6 +103,10 @@ fn serve_range(path: &Path, range: Option<&str>) -> Response<Cow<'static, [u8]>>
 enum UserEvent {
     Ipc(String),
     Eval(String),
+    /// Scan progress, 0.0..=1.0.
+    Progress(f64),
+    /// Scan finished — detections, or the reason it couldn't run.
+    Scanned(Result<Vec<crate::event::Event>, String>),
 }
 
 #[derive(Deserialize)]
@@ -154,7 +158,31 @@ pub fn run(video: &str) -> Result<()> {
         .build(&window)
         .context("creating review webview")?;
 
-    let mut state = State { set, label_path, video: video.to_string(), duration };
+    let mut state = State {
+        set,
+        label_path,
+        video: video.to_string(),
+        duration,
+        scan: "scanning for deaths…".into(),
+    };
+
+    // Scan behind the window rather than before it. The window is usable
+    // immediately — you can scrub and mark while this runs.
+    {
+        let p = proxy.clone();
+        let path = video.to_string();
+        std::thread::spawn(move || {
+            let mut last = -1.0f64;
+            let result = crate::detect::scan_deaths(&path, |frac| {
+                // Only wake the UI on visible movement, not every frame.
+                if frac - last >= 0.01 || frac >= 1.0 {
+                    last = frac;
+                    let _ = p.send_event(UserEvent::Progress(frac));
+                }
+            });
+            let _ = p.send_event(UserEvent::Scanned(result.map_err(|e| format!("{e:#}"))));
+        });
+    }
 
     event_loop.run(move |ev, _, flow| {
         *flow = ControlFlow::Wait;
@@ -166,6 +194,35 @@ pub fn run(video: &str) -> Result<()> {
             WinEvent::UserEvent(UserEvent::Eval(js)) => {
                 let _ = webview.evaluate_script(&js);
             }
+            WinEvent::UserEvent(UserEvent::Progress(frac)) => {
+                state.scan = format!("scanning for deaths… {}%", (frac * 100.0).round() as u32);
+                let _ = webview
+                    .evaluate_script(&format!("window.scanProgress({:.4})", frac));
+            }
+            WinEvent::UserEvent(UserEvent::Scanned(result)) => match result {
+                Ok(found) => {
+                    let n = found.len();
+                    log::info!("scan complete: {n} death(s)");
+                    state.scan = if n == 0 {
+                        "scan complete — no deaths found. Scrub and press K to mark kills."
+                            .into()
+                    } else {
+                        format!("scan complete — {n} death{} found", if n == 1 { "" } else { "s" })
+                    };
+                    state.set.merge_detections(found, 3.0);
+                    state.save();
+                    state.push(&proxy, "updated");
+                    let _ = webview.evaluate_script(&format!("window.scanDone({n})"));
+                }
+                Err(e) => {
+                    log::warn!("scan failed: {e}");
+                    state.scan = format!("scan failed — {e}");
+                    let _ = webview.evaluate_script(&format!(
+                        "window.scanFailed({})",
+                        js_str(&e)
+                    ));
+                }
+            },
             _ => {}
         }
     });
@@ -176,6 +233,9 @@ struct State {
     label_path: PathBuf,
     video: String,
     duration: f64,
+    /// Current scan status, carried in the payload so a page that finishes
+    /// loading *after* the scan doesn't sit on a stale "scanning…" label.
+    scan: String,
 }
 
 impl State {
@@ -224,6 +284,7 @@ impl State {
             duration: f64,
             pre: f64,
             post: f64,
+            scan: &'a str,
             labels: &'a [crate::labels::Label],
         }
         let payload = Payload {
@@ -232,6 +293,7 @@ impl State {
             duration: self.duration,
             pre: PRE,
             post: POST,
+            scan: &self.scan,
             labels: &self.set.labels,
         };
         match serde_json::to_string(&payload) {

@@ -14,6 +14,9 @@
   #head { padding: 10px 12px; border-bottom: 1px solid var(--line); }
   #head h1 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
   #tally { color: var(--dim); font-size: 12px; }
+  #scan { color: var(--accent); font-size: 12px; margin-top: 3px; }
+  #scan.done { color: var(--dim); }
+  #scan.failed { color: var(--no); }
   #list { flex: 1; overflow-y: auto; }
   .ev { padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer;
         display: flex; gap: 8px; align-items: baseline; }
@@ -47,6 +50,7 @@
   <div id="head">
     <h1 id="vid">—</h1>
     <div id="tally">loading…</div>
+    <div id="scan">scanning for deaths…</div>
   </div>
   <div id="list"></div>
 </div>
@@ -80,6 +84,7 @@
     // natively. That matters most when the scan found NOTHING — you still get
     // a scrubbable video to mark kills on, which is the usual case.
     if (v.src !== d.url) v.src = d.url;
+    if (d.scan) scanEl().textContent = d.scan;
     render();
     if (d.labels.length) {
       // Open on the first thing still awaiting a verdict — that's the queue.
@@ -128,6 +133,28 @@
   }
 
   window.clipError = m => msg(m);
+
+  const scanEl = () => document.getElementById("scan");
+  window.scanProgress = f => {
+    scanEl().textContent = `scanning for deaths… ${Math.round(f * 100)}%`;
+  };
+  window.scanDone = n => {
+    const el = scanEl();
+    el.className = "done";
+    el.textContent = n
+      ? `scan complete — ${n} death${n === 1 ? "" : "s"} found`
+      : "scan complete — no deaths found. Scrub and press K to mark kills.";
+    // Land on the first unreviewed detection if the scan turned any up.
+    if (n && sel < 0) {
+      const i = data.labels.findIndex(l => l.confirmed === null);
+      if (i >= 0) select(i);
+    }
+  };
+  window.scanFailed = m => {
+    const el = scanEl();
+    el.className = "failed";
+    el.textContent = `scan failed — ${m}`;
+  };
   v.addEventListener("error", () => msg(
     "Could not play this video. If it's HEVC, WebView2 may not decode it — " +
     "H.264 sources (Twitch VODs, OBS defaults) work."));
