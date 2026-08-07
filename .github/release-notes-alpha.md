@@ -1,4 +1,28 @@
-## alpha: ClipAnalyzer actually launches now 🔍
+## alpha: scrub any recording, mark kills by hand 🔍
+
+### The review window works when nothing is detected
+Which is most of the time — you extract far more often than you die, so a
+typical VOD scans clean. Previously that left an empty window with no video and
+nothing to do, which was backwards: that's exactly when you need to mark kills
+yourself.
+
+The window now **serves the recording with range support**, so the player seeks
+against the original file:
+
+- **Scrub freely whether or not anything was detected.** Open a VOD, find a
+  kill, press **K**. That's how kills get labelled until a detector exists.
+- **No transcode.** Selecting a detection is an instant seek, not a wait.
+- **Marks land on the real timestamp** — the playhead is source time now, so
+  there's no window-offset arithmetic to get subtly wrong.
+
+**If a video won't play:** WebView2 may not decode HEVC. H.264 sources (Twitch
+VODs, OBS defaults) are fine; recordings from LowResourceCapture itself are
+HEVC and may not play here yet. The window says so rather than showing a blank
+player.
+
+---
+
+## Also in this release: the analyzer launches at all
 
 ### Fixed: the analyzer did nothing when you double-clicked it
 `clipanalyzer.exe` is a windowed build, so it has no console — and its shortcut
