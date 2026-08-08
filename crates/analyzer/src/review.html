@@ -44,6 +44,31 @@
   kbd { background: #10131a; border: 1px solid var(--line); border-radius: 3px;
         padding: 0 4px; font-size: 11px; color: var(--dim); }
   #keys { margin-top: 8px; color: var(--dim); font-size: 12px; }
+
+  /* Training panel */
+  #train { position: fixed; inset: 0; background: rgba(10,12,15,.88); display: none;
+           align-items: center; justify-content: center; z-index: 50; }
+  #train.on { display: flex; }
+  #tbox { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+          width: min(880px, 92vw); max-height: 88vh; display: flex; flex-direction: column; }
+  #thead { padding: 12px 16px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: center; gap: 12px; }
+  #thead h2 { margin: 0; font-size: 14px; flex: 1; }
+  #tbody { padding: 14px 16px; overflow-y: auto; }
+  .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .stat { background: #22262e; border: 1px solid var(--line); border-radius: 4px;
+          padding: 6px 10px; font-variant-numeric: tabular-nums; }
+  .stat b { color: var(--accent); }
+  .warn { color: var(--pend); }
+  .bad { color: var(--no); }
+  .good { color: var(--ok); }
+  #tlog { background: #0d1015; border: 1px solid var(--line); border-radius: 4px;
+          font: 11px/1.5 Consolas, monospace; padding: 8px; height: 260px;
+          overflow-y: auto; white-space: pre-wrap; color: #c3c9d4; }
+  #tlog:empty::before { content: "Output appears here."; color: var(--dim); }
+  input[type=text] { background: #10131a; border: 1px solid var(--line); color: var(--text);
+                     border-radius: 4px; padding: 6px 8px; font: inherit; flex: 1; min-width: 220px; }
+  .hint { color: var(--dim); font-size: 12px; margin: 2px 0 10px; }
 </style>
 
 <div id="side">
@@ -65,9 +90,45 @@
     <button onclick="mark('death')">+ Death here <kbd>D</kbd></button>
     <button onclick="mark('monsterkill')">+ Monster here <kbd>M</kbd></button>
     <button onclick="exportClips()">Export confirmed → clip</button>
+    <button onclick="openTraining()">🧠 Training…</button>
     <div id="keys">
       <kbd>←</kbd><kbd>→</kbd> prev/next detection · <kbd>Space</kbd> play/pause ·
       scrub the video freely — marks land at the playhead
+    </div>
+  </div>
+</div>
+
+<div id="train">
+  <div id="tbox">
+    <div id="thead">
+      <h2>Training</h2>
+      <button onclick="closeTraining()">Close</button>
+    </div>
+    <div id="tbody">
+      <div class="row"><b>1. Dataset</b></div>
+      <div class="hint">Confirmed marks from this recording become training frames.
+        Press <kbd>Y</kbd>/<kbd>K</kbd>/<kbd>M</kbd>/<kbd>D</kbd> in the review window first.</div>
+      <div class="row">
+        <input type="text" id="tdir" placeholder="dataset folder">
+        <input type="text" id="tbuild" placeholder="game build, e.g. 2026.08.06" style="max-width:220px">
+      </div>
+      <div class="row" id="tstats"></div>
+      <div class="row">
+        <button onclick="doExport()">Add this recording to the dataset</button>
+      </div>
+
+      <div class="row" style="margin-top:16px"><b>2. Python</b></div>
+      <div class="row" id="tpy"><span class="dim">checking…</span></div>
+      <div class="row">
+        <button onclick="doInstall()" id="tinstall" style="display:none">Install dependencies</button>
+      </div>
+
+      <div class="row" style="margin-top:16px"><b>3. Train</b></div>
+      <div class="row">
+        <button onclick="doTrain()" id="ttrain">Train model</button>
+        <button onclick="doCancel()" id="tcancel" style="display:none">Cancel</button>
+      </div>
+      <div id="tlog"></div>
     </div>
   </div>
 </div>
@@ -181,6 +242,98 @@
   }
 
   function exportClips() { send({ cmd: "export" }); }
+
+  // ---- Training panel ----
+  let busy = false;
+
+  function openTraining() {
+    document.getElementById("train").classList.add("on");
+    send({ cmd: "trainingStatus" });
+  }
+  function closeTraining() {
+    document.getElementById("train").classList.remove("on");
+  }
+
+  window.trainingStatus = s => {
+    if (!document.getElementById("tdir").value) {
+      document.getElementById("tdir").value = s.dataset.dir;
+    }
+    if (s.build && !document.getElementById("tbuild").value) {
+      document.getElementById("tbuild").value = s.build;
+    }
+
+    const d = s.dataset;
+    const parts = [];
+    if (!d.exists) {
+      parts.push('<span class="stat warn">empty — add a recording</span>');
+    } else {
+      parts.push(`<span class="stat"><b>${d.total}</b> frames</span>`);
+      parts.push(`<span class="stat"><b>${d.sources}</b> recordings</span>`);
+      for (const [k, v] of Object.entries(d.per_class)) {
+        const thin = v < 50 ? " warn" : "";
+        parts.push(`<span class="stat${thin}">${k}: <b>${v}</b></span>`);
+      }
+      if (d.builds.length) parts.push(`<span class="stat">builds: ${d.builds.join(", ")}</span>`);
+      if (!d.enough_to_train) {
+        parts.push('<span class="stat warn">needs ≥2 recordings before a score means anything</span>');
+      }
+    }
+    document.getElementById("tstats").innerHTML = parts.join(" ");
+
+    const py = s.python;
+    const el = document.getElementById("tpy");
+    if (!py.command) {
+      el.innerHTML = `<span class="bad">${py.detail}</span>`;
+      document.getElementById("tinstall").style.display = "none";
+    } else if (!py.deps_ok) {
+      el.innerHTML = `<span class="warn">${py.version} — ${py.detail}</span>`;
+      document.getElementById("tinstall").style.display = "";
+    } else {
+      el.innerHTML = `<span class="good">${py.version} — ready</span>`;
+      document.getElementById("tinstall").style.display = "none";
+    }
+
+    if (s.model) {
+      log(s.model);
+    }
+  };
+
+  function log(line) {
+    const el = document.getElementById("tlog");
+    el.textContent += line + "\n";
+    el.scrollTop = el.scrollHeight;
+  }
+  window.trainLog = log;
+
+  window.trainBusy = on => {
+    busy = on;
+    document.getElementById("ttrain").disabled = on;
+    document.getElementById("tinstall").disabled = on;
+    document.getElementById("tcancel").style.display = on ? "" : "none";
+  };
+
+  function doExport() {
+    if (busy) return;
+    send({
+      cmd: "exportDataset",
+      dir: document.getElementById("tdir").value,
+      build: document.getElementById("tbuild").value,
+    });
+  }
+  function doInstall() {
+    if (busy) return;
+    log("Installing torch/torchvision/pillow — this is a large download, several minutes.");
+    send({ cmd: "installDeps" });
+  }
+  function doTrain() {
+    if (busy) return;
+    send({
+      cmd: "trainModel",
+      dir: document.getElementById("tdir").value,
+      build: document.getElementById("tbuild").value,
+    });
+  }
+  function doCancel() { send({ cmd: "cancelTraining" }); }
 
   document.addEventListener("keydown", e => {
     if (e.target.tagName === "INPUT") return;

@@ -27,6 +27,7 @@ mod labels;
 mod model;
 mod profile;
 mod review;
+mod training;
 mod winui;
 
 use anyhow::Result;
@@ -173,7 +174,7 @@ fn export_dataset(input: &str, dir: &str, build: &str) -> Result<()> {
 
     let duration = shared::ffmpeg::duration_secs(input).unwrap_or(0.0);
     let (_, height) = frames::dimensions(input).unwrap_or((1920, 1080));
-    let profile = load_profile();
+    let profile = training::installed_profile();
 
     let root = std::path::Path::new(dir);
     let manifest = export::export(input, &set, profile.as_ref(), root, duration, height)?;
@@ -191,18 +192,3 @@ fn export_dataset(input: &str, dir: &str, build: &str) -> Result<()> {
     Ok(())
 }
 
-/// Detection profile shipped next to the exe, if there is one.
-fn load_profile() -> Option<profile::GameProfile> {
-    let dir = shared::config::install_dir().ok()?.join("profiles");
-    let entries = std::fs::read_dir(dir).ok()?;
-    for e in entries.flatten() {
-        if e.path().extension().is_some_and(|x| x == "toml") {
-            if let Ok(text) = std::fs::read_to_string(e.path()) {
-                if let Ok(p) = profile::GameProfile::from_toml(&text) {
-                    return Some(p);
-                }
-            }
-        }
-    }
-    None
-}

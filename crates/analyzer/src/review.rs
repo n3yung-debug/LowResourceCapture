@@ -107,6 +107,12 @@ enum UserEvent {
     Progress(f64),
     /// Scan finished — detections, or the reason it couldn't run.
     Scanned(Result<Vec<crate::event::Event>, String>),
+    /// A line of output from an export/install/train subprocess.
+    TrainLog(String),
+    /// A long-running training task started (true) or finished (false).
+    TrainBusy(bool),
+    /// Re-send dataset/Python status to the page.
+    TrainRefresh,
 }
 
 #[derive(Deserialize)]
@@ -120,6 +126,10 @@ struct Msg {
     kind: String,
     #[serde(default)]
     at: f64,
+    #[serde(default)]
+    dir: String,
+    #[serde(default)]
+    build: String,
 }
 
 /// Open the review window for `video`, using the label file beside it.
@@ -164,6 +174,7 @@ pub fn run(video: &str) -> Result<()> {
         video: video.to_string(),
         duration,
         scan: "scanning for deaths…".into(),
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     // Scan behind the window rather than before it. The window is usable
@@ -194,6 +205,14 @@ pub fn run(video: &str) -> Result<()> {
             WinEvent::UserEvent(UserEvent::Eval(js)) => {
                 let _ = webview.evaluate_script(&js);
             }
+            WinEvent::UserEvent(UserEvent::TrainLog(line)) => {
+                let _ = webview
+                    .evaluate_script(&format!("window.trainLog({})", js_str(&line)));
+            }
+            WinEvent::UserEvent(UserEvent::TrainBusy(on)) => {
+                let _ = webview.evaluate_script(&format!("window.trainBusy({on})"));
+            }
+            WinEvent::UserEvent(UserEvent::TrainRefresh) => state.push_training_status(&proxy),
             WinEvent::UserEvent(UserEvent::Progress(frac)) => {
                 state.scan = format!("scanning for deaths… {}%", (frac * 100.0).round() as u32);
                 let _ = webview
@@ -236,6 +255,8 @@ struct State {
     /// Current scan status, carried in the payload so a page that finishes
     /// loading *after* the scan doesn't sit on a stale "scanning…" label.
     scan: String,
+    /// Set to cancel a running install/train subprocess.
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl State {
@@ -270,6 +291,121 @@ impl State {
 
             "export" => self.export(proxy),
 
+            // ---- training panel ----
+            "trainingStatus" => self.push_training_status(proxy),
+
+            "exportDataset" => {
+                let dir = if m.dir.is_empty() {
+                    crate::training::default_dataset_dir()
+                } else {
+                    PathBuf::from(&m.dir)
+                };
+                if !m.build.is_empty() && self.set.game_build != m.build {
+                    self.set.game_build = m.build.clone();
+                    self.save();
+                }
+                let confirmed = self.set.labels.iter().filter(|l| l.confirmed == Some(true)).count();
+                if confirmed == 0 {
+                    let _ = proxy.send_event(UserEvent::TrainLog(
+                        "Nothing confirmed on this recording yet — press Y, K, M or D first."
+                            .into(),
+                    ));
+                    return;
+                }
+
+                let set = self.set.clone();
+                let video = self.video.clone();
+                let duration = self.duration;
+                let p = proxy.clone();
+                let _ = p.send_event(UserEvent::TrainBusy(true));
+                std::thread::spawn(move || {
+                    let height = crate::frames::dimensions(&video).map(|d| d.1).unwrap_or(1080);
+                    let profile = crate::training::installed_profile();
+                    let msg = match crate::export::export(
+                        &video, &set, profile.as_ref(), &dir, duration, height,
+                    ) {
+                        Ok(man) => format!(
+                            "Added {} frames from this recording to {}",
+                            man.examples.len(),
+                            dir.display()
+                        ),
+                        Err(e) => format!("Export failed: {e:#}"),
+                    };
+                    let _ = p.send_event(UserEvent::TrainLog(msg));
+                    let _ = p.send_event(UserEvent::TrainBusy(false));
+                    let _ = p.send_event(UserEvent::TrainRefresh);
+                });
+            }
+
+            "installDeps" => {
+                let p = proxy.clone();
+                let flag = self.cancel.clone();
+                flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                let _ = p.send_event(UserEvent::TrainBusy(true));
+                std::thread::spawn(move || {
+                    let py = crate::training::detect_python();
+                    let p2 = p.clone();
+                    let f2 = flag.clone();
+                    let ok = crate::training::install_dependencies(
+                        &py,
+                        |line| {
+                            let _ = p2.send_event(UserEvent::TrainLog(line));
+                        },
+                        &move || f2.load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                    let _ = p.send_event(UserEvent::TrainLog(match ok {
+                        Ok(true) => "Dependencies installed.".into(),
+                        Ok(false) => "Install did not complete.".to_string(),
+                        Err(e) => format!("Install failed: {e:#}"),
+                    }));
+                    let _ = p.send_event(UserEvent::TrainBusy(false));
+                    let _ = p.send_event(UserEvent::TrainRefresh);
+                });
+            }
+
+            "trainModel" => {
+                let dir = if m.dir.is_empty() {
+                    crate::training::default_dataset_dir()
+                } else {
+                    PathBuf::from(&m.dir)
+                };
+                let build = m.build.clone();
+                let p = proxy.clone();
+                let flag = self.cancel.clone();
+                flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                let _ = p.send_event(UserEvent::TrainBusy(true));
+                std::thread::spawn(move || {
+                    let py = crate::training::detect_python();
+                    if !py.deps_ok {
+                        let _ = p.send_event(UserEvent::TrainLog(py.detail.clone()));
+                        let _ = p.send_event(UserEvent::TrainBusy(false));
+                        return;
+                    }
+                    let p2 = p.clone();
+                    let f2 = flag.clone();
+                    let ok = crate::training::train(
+                        &py,
+                        &dir,
+                        &build,
+                        |line| {
+                            let _ = p2.send_event(UserEvent::TrainLog(line));
+                        },
+                        &move || f2.load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                    let _ = p.send_event(UserEvent::TrainLog(match ok {
+                        Ok(true) => "Training finished.".into(),
+                        Ok(false) => "Training stopped before finishing.".to_string(),
+                        Err(e) => format!("Training failed: {e:#}"),
+                    }));
+                    let _ = p.send_event(UserEvent::TrainBusy(false));
+                    let _ = p.send_event(UserEvent::TrainRefresh);
+                });
+            }
+
+            "cancelTraining" => {
+                self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+
             other => log::warn!("review: unknown command {other}"),
         }
     }
@@ -301,6 +437,31 @@ impl State {
                 let _ = proxy.send_event(UserEvent::Eval(format!("window.{func}({json})")));
             }
             Err(e) => log::warn!("review: could not serialize labels: {e}"),
+        }
+    }
+
+    /// Dataset + Python + model status for the training panel.
+    fn push_training_status(&self, proxy: &EventLoopProxy<UserEvent>) {
+        #[derive(serde::Serialize)]
+        struct Payload {
+            dataset: crate::training::DatasetStatus,
+            python: crate::training::PythonStatus,
+            build: String,
+            model: String,
+        }
+        let dir = crate::training::default_dataset_dir();
+        let model = crate::training::model_summary(&dir, &self.set.game_build);
+        let payload = Payload {
+            dataset: crate::training::dataset_status(&dir),
+            python: crate::training::detect_python(),
+            build: self.set.game_build.clone(),
+            model,
+        };
+        match serde_json::to_string(&payload) {
+            Ok(json) => {
+                let _ = proxy.send_event(UserEvent::Eval(format!("window.trainingStatus({json})")));
+            }
+            Err(e) => log::warn!("review: could not serialize training status: {e}"),
         }
     }
 

@@ -59,6 +59,13 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 ; Its own copy of ffmpeg. The analyzer is independently installable, so it
 ; cannot assume the recorder is present to borrow one from.
 Source: "..\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Detection profiles — game-specific data, not code, so a new game is a file
+; drop rather than a release.
+Source: "..\crates\analyzer\profiles\*.toml"; DestDir: "{app}\profiles"; Flags: ignoreversion
+; The trainer the Training panel runs. Without this the Train button works in
+; a dev checkout and fails on a real install.
+Source: "..\crates\analyzer\training\train.py"; DestDir: "{app}\training"; Flags: ignoreversion
+Source: "..\crates\analyzer\training\README.md"; DestDir: "{app}\training"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
