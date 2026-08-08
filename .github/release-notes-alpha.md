@@ -1,63 +1,76 @@
-## alpha: train a kill detector from inside the app 🧠
+## alpha: fix — M was recording monster kills as deaths 🐛
+
+**Install this before marking anything else.** In 0.1.27 the **M** key wrote
+its mark to disk as a *death*, not a monster kill. The sidebar wasn't
+mislabeling it — the data itself was wrong.
+
+That matters more than a cosmetic bug, because monster marks are the negative
+class that teaches the model to tell a monster death from a player one. Marks
+made with M in 0.1.27 are training data pointing the wrong way.
+
+### Recovering marks you already made
+They can't be fixed automatically — the intent isn't recoverable from the
+file. But they're easy to spot by hand. In `<video>.labels.json`, look for:
+
+```json
+"kind": "death", "origin": "manual"
+```
+
+Real deaths are almost always found by the detector (`"origin": "detected"`),
+so a *hand-marked* death is very likely a mangled monster kill. Change those
+to `"monsterkill"`, or delete them and re-mark. Leave `"origin": "detected"`
+entries alone.
+
+### The cause
+Adding the monster-kill class left the review window's string match with a
+catch-all that swallowed the new name:
+
+```rust
+"playerkill" => Kind::PlayerKill,
+_            => Kind::Death,      // "monsterkill" landed here
+```
+
+Now there's one shared mapping with no catch-all, so an unrecognized mark is
+refused and reported rather than silently becoming something else — plus tests
+that every class round-trips through its name, and that those names match what
+actually gets written to the label file.
+
+---
+
+## Also in this release: train a kill detector from inside the app 🧠
 
 No terminal. The analyzer finds Python, installs what's missing, runs the
-trainer, and streams the output into its own window.
+trainer, and streams output into its own window.
 
-### New: Training panel
-In the review window, press **🧠 Training…**
+**Review window → 🧠 Training…**
 
-1. **Dataset** — pick a folder and the game build, see live per-class counts,
-   and **Add this recording to the dataset**.
-2. **Python** — shows the detected version and whether the dependencies are
-   actually importable. If they aren't, **Install dependencies** runs pip and
-   streams the download.
+1. **Dataset** — folder, game build, live per-class counts, and
+   **Add this recording to the dataset**.
+2. **Python** — detected version and whether dependencies actually import;
+   **Install dependencies** runs pip if not.
 3. **Train** — run it, watch the log, cancel mid-run.
 
-### The loop
 ```
 Record  →  Review (Y / K / M / D)  →  Add to dataset  →  Train  →  repeat
 ```
-Every recording you review makes the dataset bigger. Retrain whenever.
-
-### Why a trained model at all
-Every cheap shortcut for detecting kills in Mistfall Hunter was tried and
-measured, and all of them failed:
-
-- **No kill feed** — removed by a patch.
-- **No kill audio cue** — confirmed by ear after four different automated
-  searches turned up nothing but a monster's ambient bell.
-- **The gold death-burst doesn't discriminate** — it fires just as hard for
-  monsters as players; the largest burst measured was a monster kill.
-- **The enemy nameplate can't be found by colour** — a matchmaking screen with
-  no enemy present has *more* red than a real fight.
-
-A trained model is what's left. It works here because enemy cosmetics don't
-render: a given class in a given armor tier looks identical every time, and
-each map's monsters are a fixed roster — a small, closed problem rather than
-"recognize an arbitrary player".
 
 ### Press M as often as K
-Monster kills aren't filler, they're half the signal. The death-burst is
-identical for both, so a model that never sees a monster death has no way to
-learn the only distinction that matters.
+The gold death-burst is identical for monsters and players — the largest one
+measured was a monster kill. A model that never sees a monster death has no
+way to learn the only distinction that matters.
 
 ### Honest about the numbers
 - **Two recordings minimum** before an accuracy figure means anything. Frames
-  from one death are near-duplicates, so the split holds out whole recordings
-  — with one, there's nothing to hold out and the panel says so.
-- **Per-class recall is shown, not just accuracy.** With far more "nothing
+  from one death are near-duplicates, so the split holds out whole recordings.
+- **Per-class recall is shown, not just accuracy** — with far more "nothing
   happened" frames than kills, a model scores well by never predicting a kill.
-  Classes are weighted against that, and thin ones are flagged in amber.
-- **Models record the game build they trained on** and flag themselves stale
-  after a patch. Nothing is discarded when the game updates — retraining mixes
-  old and new footage.
+  Thin classes are flagged in amber.
+- **Models record the build they trained on** and flag themselves stale after
+  a patch. Nothing is discarded when the game updates.
 
 ### Still to come
 The analyzer doesn't yet *use* a trained model to find kills — you can build
-one and read its score, but detection still means marking by hand. Wiring
-inference in is next.
+one and read its score, but detection still means marking by hand.
 
 ### Note
-Unsigned installers, so SmartScreen and UAC prompts are expected. The training
-panel has never run outside CI — if something breaks, the log pane should show
-it rather than failing silently.
+Unsigned installers, so SmartScreen and UAC prompts are expected.
