@@ -286,6 +286,30 @@ face value.
     distinguish "shared kill sound" from "shared background ambiance still
     playing in all three windows." Sent Nick the pk4 clip (already has pk1
     and pk3 from the prior round) with the corrected question. PENDING.
+  - **Nick's headshot/non-headshot hypothesis (2026-08-08): confirmed
+    non-headshot example found and cross-tested — INCONCLUSIVE, not
+    negative.** Nick identified the Twitch VOD's 2:22 kill (k1, precise
+    onset 142.4s) as a white/non-headshot damage number; independently
+    verified from the frame ("249"/"124", both white). Cross-correlated
+    against the three confirmed red/headshot local instances (pk1/pk3/pk4):
+    **white~red scores (0.44–0.51 whitened) land in the same range as
+    red~red scores (0.45–0.58)** — no separation by headshot status, which
+    argues against the hypothesis, but the comparison is confounded by
+    crossing sources (Twitch transcode, single mixed track vs. native
+    local, clean separated tracks), so a real distinction could be getting
+    washed out by that mismatch rather than not existing. **Sent Nick the
+    white-kill clip for direct listening comparison — PENDING**, per the
+    established pattern in this investigation that his ears have caught
+    things (the monster bell) blind correlation could not.
+  - **Method note for whoever picks this up next:** every attempt so far has
+    mixed two different questions — "does *a* repeatable sound exist across
+    these kills" and "is that sound the kill cue specifically." Blind
+    correlation only answers the first. Closing this properly likely needs
+    either (a) a same-source contrast pair (a confirmed red AND a confirmed
+    white kill from the *same* recording, avoiding the transcode confound
+    entirely — worth hunting for in a future local capture), or (b) Nick
+    identifying the cue's rough timing/character by ear so a search can be
+    targeted rather than blind.
 
 ## Confidence discipline for this repo
 
