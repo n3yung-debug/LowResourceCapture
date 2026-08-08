@@ -297,19 +297,29 @@ face value.
     argues against the hypothesis, but the comparison is confounded by
     crossing sources (Twitch transcode, single mixed track vs. native
     local, clean separated tracks), so a real distinction could be getting
-    washed out by that mismatch rather than not existing. **Sent Nick the
-    white-kill clip for direct listening comparison — PENDING**, per the
-    established pattern in this investigation that his ears have caught
-    things (the monster bell) blind correlation could not.
-  - **Method note for whoever picks this up next:** every attempt so far has
-    mixed two different questions — "does *a* repeatable sound exist across
-    these kills" and "is that sound the kill cue specifically." Blind
-    correlation only answers the first. Closing this properly likely needs
-    either (a) a same-source contrast pair (a confirmed red AND a confirmed
-    white kill from the *same* recording, avoiding the transcode confound
-    entirely — worth hunting for in a future local capture), or (b) Nick
-    identifying the cue's rough timing/character by ear so a search can be
-    targeted rather than blind.
+    washed out by that mismatch rather than not existing. Sent Nick the
+    white-kill clip for direct listening comparison against the pk1/pk3/pk4
+    reds, per the established pattern in this investigation that his ears
+    have caught things (the monster bell) blind correlation could not.
+  - **CLOSED — kill audio sting: VERIFIED NEGATIVE, no reservation. Nick
+    confirms (2026-08-08), listening directly: there is no audio cue when a
+    player dies.** This is ground truth, not another correlation score — his
+    ears are the actual instrument this whole investigation kept deferring
+    to, and every automated attempt either found nothing or found a false
+    lead (the monster bell). The headshot/non-headshot hypothesis is now
+    moot along with it: there being no cue at all supersedes the question of
+    whether two different cues exist. **Audio is off the table as a kill
+    signal, permanently, not just off the critical path.** Do not re-open
+    this without new evidence Nick hasn't already ruled out by ear.
+  - **Consequence for the project: every hand-engineered shortcut for kill
+    detection has now failed.** No kill feed (game mechanic). Nameplate
+    colour doesn't discriminate (verified negative, 2026-08-07). Gold burst
+    doesn't discriminate player from monster (verified negative,
+    2026-08-07). Kill audio doesn't exist (verified negative, 2026-08-08).
+    **The trained nameplate detector + event classifier (L6's `BBox` /
+    `Kind::MonsterKill` data model) is no longer one option among several —
+    it is the only remaining path**, and it depends entirely on the boxes
+    and marks Nick produces in the review window.
 
 ## Confidence discipline for this repo
 
