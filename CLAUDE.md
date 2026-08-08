@@ -255,14 +255,31 @@ face value.
   all three pairs, not two of three, and broadband correlation across bass
   *and* treble simultaneously looks more like a shared weapon-swing/impact
   sound (pk1 and pk2 coincidentally ending on the same finisher animation)
-  than a narrowband UI-style sting. **PENDING: Nick is listening to six
-  2.5s clips (3 kills × 2 tracks) sent directly** to identify which track is
-  game audio and confirm/deny by ear whether pk1–pk2's match is the real cue
-  or a coincidental shared attack sound. This is the fourth automated
-  variant of this search (whole-VOD, tight-window, precisely-realigned,
-  band-limited) — per this project's failure-handling rule, two-plus
-  automated misses is the trigger to change the *kind* of evidence rather
-  than try a fifth blind variant, hence handing this to a human ear.
+  than a narrowband UI-style sting. This was the fourth automated variant of
+  this search (whole-VOD, tight-window, precisely-realigned, band-limited) —
+  per this project's failure-handling rule, two-plus automated misses is the
+  trigger to change the *kind* of evidence rather than try a fifth blind
+  variant, hence handing it to a human ear.
+  - **RESOLVED (Nick listened, 2026-08-07): the pk1~pk2/pk2~pk3 match was a
+    monster's ambient ringing-bell sound, unrelated to either kill.** Both
+    live tracks are confirmed game audio (neither is mic — the mic likely
+    landed on one of the three silent tracks, consistent with Nick not
+    speaking). The blind search worked exactly as designed — it found the
+    loudest genuinely-repeated sound in the windows — it just wasn't hunting
+    for the right thing, because ambient monster audio outscored whatever the
+    actual kill cue is. **Lesson for the next attempt: broadband/best-match
+    cross-correlation will always surface the loudest repeat, so a quiet
+    target needs the loud false leads suppressed or excluded first, not a
+    blinder search.**
+    - **Also reconfirmed, more precisely this pass: the training-room and
+      live-PvP kill cue is the same audio AND the same volume level** — not
+      merely similar, per Nick directly. Rules out an amplitude-masking
+      explanation for why blind search keeps missing it.
+    - **STILL OPEN:** the actual kill-cue audio has not been isolated. Next
+      step needs Nick to describe what he actually hears in the clips — rough
+      position within the ~2.5s window, and the sound's character (chime vs.
+      thud vs. whoosh, etc.) — so a targeted search can exclude the bell and
+      look in the right place instead of guessing again.
 
 ## Confidence discipline for this repo
 
