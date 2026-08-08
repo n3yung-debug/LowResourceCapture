@@ -260,26 +260,32 @@ face value.
   per this project's failure-handling rule, two-plus automated misses is the
   trigger to change the *kind* of evidence rather than try a fifth blind
   variant, hence handing it to a human ear.
-  - **RESOLVED (Nick listened, 2026-08-07): the pk1~pk2/pk2~pk3 match was a
-    monster's ambient ringing-bell sound, unrelated to either kill.** Both
-    live tracks are confirmed game audio (neither is mic — the mic likely
-    landed on one of the three silent tracks, consistent with Nick not
-    speaking). The blind search worked exactly as designed — it found the
-    loudest genuinely-repeated sound in the windows — it just wasn't hunting
-    for the right thing, because ambient monster audio outscored whatever the
-    actual kill cue is. **Lesson for the next attempt: broadband/best-match
-    cross-correlation will always surface the loudest repeat, so a quiet
-    target needs the loud false leads suppressed or excluded first, not a
-    blinder search.**
-    - **Also reconfirmed, more precisely this pass: the training-room and
-      live-PvP kill cue is the same audio AND the same volume level** — not
-      merely similar, per Nick directly. Rules out an amplitude-masking
-      explanation for why blind search keeps missing it.
-    - **STILL OPEN:** the actual kill-cue audio has not been isolated. Next
-      step needs Nick to describe what he actually hears in the clips — rough
-      position within the ~2.5s window, and the sound's character (chime vs.
-      thud vs. whoosh, etc.) — so a targeted search can exclude the bell and
-      look in the right place instead of guessing again.
+  - **CORRECTION (2026-08-07): the pair labeled as the strong match in the
+    entry above was reported backwards.** `itertools.combinations(["pk1",
+    "pk2","pk3"], 2)` prints as `(pk1,pk2), (pk1,pk3), (pk2,pk3)` — the raw
+    per-band values were `0.010, 0.672, -0.090` (bass), i.e. **pk1~pk3 was the
+    spike (0.65–0.77 across every band); pk1~pk2 and pk2~pk3 were the
+    near-zero ones.** The prose written up after the run inverted this. Nick's
+    "it's a monster's ringing bell" answer was given in response to the
+    mislabeled framing, so it's not certain which pair he was actually
+    evaluating — flagged rather than quietly trusted.
+  - **Player-kill damage numbers are RED (headshot per Nick's read of the
+    game's own color convention) for every player kill checked so far: pk1
+    (143), pk3 (125), and a newly-added pk4 at 59.65s (149).** No white
+    (non-headshot) player kill has been confirmed in this sample yet, so the
+    headshot/non-headshot audio hypothesis (Nick's, 2026-08-07) can't be
+    contrast-tested against this file — only same-type (all-headshot)
+    comparisons are possible here.
+  - **Re-run with correct pairing, now n=3 same-type (all-headshot) kills
+    (pk1, pk3, pk4) — all three pairs elevated, both tracks:** whitened
+    matched filter 0.45–0.58; band-limited envelope 0.42–0.83 across bass
+    through 16kHz. This is a real change from the earlier (mislabeled)
+    picture. **NOT YET RESOLVED whether this is the kill cue or the same
+    monster-bell ambiance persisting across a wider stretch of the
+    recording than assumed** — a repeat sample size of 3 windows can't
+    distinguish "shared kill sound" from "shared background ambiance still
+    playing in all three windows." Sent Nick the pk4 clip (already has pk1
+    and pk3 from the prior round) with the corrected question. PENDING.
 
 ## Confidence discipline for this repo
 
