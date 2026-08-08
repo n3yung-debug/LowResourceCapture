@@ -17,6 +17,7 @@
 // detector. Remove this once the kill detector consumes them.
 #![allow(dead_code)]
 
+mod classifier;
 mod dataset;
 mod detect;
 mod event;
