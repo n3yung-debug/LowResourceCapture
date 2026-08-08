@@ -1,73 +1,63 @@
-## alpha: the analyzer window actually shows up 🔍
+## alpha: train a kill detector from inside the app 🧠
 
-Three first-run bugs in a row meant ClipAnalyzer never got as far as being
-usable. This release fixes the last of them.
+No terminal. The analyzer finds Python, installs what's missing, runs the
+trainer, and streams the output into its own window.
 
-### Fixed: nothing appeared after you picked a VOD
-The analyzer scanned the **entire** recording before creating any window. On a
-9-minute 1080p60 file that's a long silent wait — the process was visible in
-Task Manager with nothing ever coming to the foreground, which is
-indistinguishable from a hang.
+### New: Training panel
+In the review window, press **🧠 Training…**
 
-The window now opens **immediately** and scans behind itself:
+1. **Dataset** — pick a folder and the game build, see live per-class counts,
+   and **Add this recording to the dataset**.
+2. **Python** — shows the detected version and whether the dependencies are
+   actually importable. If they aren't, **Install dependencies** runs pip and
+   streams the download.
+3. **Train** — run it, watch the log, cancel mid-run.
 
-- **Progress shows as a percentage** while it works.
-- **The video is scrubbable and K/D work during the scan** — playback never
-  depended on it finishing.
-- **Detections appear in the list as they land.**
-- **A scan that fails says so in the window** instead of dying quietly.
+### The loop
+```
+Record  →  Review (Y / K / M / D)  →  Add to dataset  →  Train  →  repeat
+```
+Every recording you review makes the dataset bigger. Retrain whenever.
 
-### Also fixed, earlier in this run
-- **Launching from the shortcut did nothing.** No arguments now opens a file
-  picker rather than printing usage to a console that doesn't exist.
-- **A clean scan left an empty window.** The recording is now served with range
-  support, so you can scrub and hand-mark whether or not anything was detected
-  — which matters, because you extract far more often than you die.
-- **Errors are shown, not printed.** Plus a real log at
-  `<install>\logs\clipanalyzer.log`.
+### Why a trained model at all
+Every cheap shortcut for detecting kills in Mistfall Hunter was tried and
+measured, and all of them failed:
 
-## What ClipAnalyzer does
+- **No kill feed** — removed by a patch.
+- **No kill audio cue** — confirmed by ear after four different automated
+  searches turned up nothing but a monster's ambient bell.
+- **The gold death-burst doesn't discriminate** — it fires just as hard for
+  monsters as players; the largest burst measured was a monster kill.
+- **The enemy nameplate can't be found by colour** — a matchmaking screen with
+  no enemy present has *more* red than a real fight.
 
-Point it at a video — a Twitch VOD, an OBS or NVIDIA recording:
+A trained model is what's left. It works here because enemy cosmetics don't
+render: a given class in a given armor tier looks identical every time, and
+each map's monsters are a fixed roster — a small, closed problem rather than
+"recognize an arbitrary player".
 
-1. It scans for **death screens**.
-2. **Y** confirms a detection, **N** rejects it, **←/→** walks the queue,
-   **Space** plays.
-3. **K** and **D** mark a player kill or death at the playhead.
-4. **Export confirmed → clip** assembles what you approved into one
-   `<video>_highlights.mp4`.
+### Press M as often as K
+Monster kills aren't filler, they're half the signal. The death-burst is
+identical for both, so a model that never sees a monster death has no way to
+learn the only distinction that matters.
 
-Verdicts save to `<video>.labels.json` beside the source and **survive
-re-scanning**, so a re-tuned detector never costs you a review.
+### Honest about the numbers
+- **Two recordings minimum** before an accuracy figure means anything. Frames
+  from one death are near-duplicates, so the split holds out whole recordings
+  — with one, there's nothing to hold out and the panel says so.
+- **Per-class recall is shown, not just accuracy.** With far more "nothing
+  happened" frames than kills, a model scores well by never predicting a kill.
+  Classes are weighted against that, and thin ones are flagged in amber.
+- **Models record the game build they trained on** and flag themselves stale
+  after a patch. Nothing is discarded when the game updates — retraining mixes
+  old and new footage.
 
-## Kills are marked by hand, and that's deliberate
+### Still to come
+The analyzer doesn't yet *use* a trained model to find kills — you can build
+one and read its score, but detection still means marking by hand. Wiring
+inference in is next.
 
-Mistfall Hunter has no kill feed, and measurement ruled out the shortcuts:
-the kill audio sting isn't recoverable from a Twitch transcode, the gold
-death-burst fires just as hard on monsters as on players (the largest burst
-measured was a monster kill), and the enemy nameplate can't be found by colour
-— a matchmaking screen with no enemy present has *more* red than a real fight.
-
-So a kill detector needs training data, and hand-marking is how it gets made.
-Every **K** is one example.
-
-## Death detection, measured
-
-Swept across a full 9:22 VOD at 2 fps (1123 frames): the death card scores
-**0.443–0.500**; the loudest false positive in the other nine minutes scores
-**0.178**. Threshold 0.30 — about 2.5× margin either way, and the five
-highest-scoring frames in the whole recording are the death.
-
-Calibrated on a 1080p Twitch transcode. The margin should carry to native
-1440p, but that's expectation, not measurement.
-
-## Known limits
-
-- **HEVC may not play.** WebView2 doesn't always decode it. H.264 sources
-  (Twitch VODs, OBS defaults) are fine; recordings from LowResourceCapture
-  itself are HEVC and may not play here yet. The window says so rather than
-  showing a blank player.
-- **Scanning is slower than it needs to be** — it decodes every frame to sample
-  two per second. Keyframe-only sampling would be far faster and should still
-  catch a card that's up for 2.5s.
-- Unsigned installers, so SmartScreen and UAC prompts are expected.
+### Note
+Unsigned installers, so SmartScreen and UAC prompts are expected. The training
+panel has never run outside CI — if something breaks, the log pane should show
+it rather than failing silently.
