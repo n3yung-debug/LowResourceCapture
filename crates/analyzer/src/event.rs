@@ -38,6 +38,29 @@ impl Event {
     }
 }
 
+impl Kind {
+    /// Every variant, so callers that map to/from strings can be checked
+    /// against the full set instead of quietly handling a subset.
+    pub const ALL: [Kind; 3] = [Kind::Death, Kind::PlayerKill, Kind::MonsterKill];
+
+    /// The wire name used by the review UI. Must match serde's `lowercase`
+    /// renaming so a mark round-trips through the label file unchanged.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Kind::Death => "death",
+            Kind::PlayerKill => "playerkill",
+            Kind::MonsterKill => "monsterkill",
+        }
+    }
+
+    /// Parse a wire name. `None` for anything unrecognized — deliberately not
+    /// defaulting, because a mark silently stored as the wrong kind is worse
+    /// than one refused outright.
+    pub fn from_wire(s: &str) -> Option<Kind> {
+        Kind::ALL.into_iter().find(|k| k.wire_name() == s)
+    }
+}
+
 /// Collapse a burst of detections of the same kind into one event.
 ///
 /// A detector sampling at several frames a second fires repeatedly across the
@@ -95,6 +118,42 @@ mod tests {
 
     fn ev(kind: Kind, at: f64, score: f64) -> Event {
         Event::new(kind, at, score)
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_its_wire_name() {
+        // This is the test that was missing. Adding Kind::MonsterKill left the
+        // review window's string match with a catch-all that recorded it as a
+        // Death — the mark was wrong on disk, not just mislabeled on screen.
+        for k in Kind::ALL {
+            assert_eq!(Kind::from_wire(k.wire_name()), Some(k), "{k:?} did not round-trip");
+        }
+    }
+
+    #[test]
+    fn wire_names_match_the_serialized_form() {
+        // The UI sends what serde writes. If these drift, a mark saved by one
+        // and read by the other silently changes kind.
+        for k in Kind::ALL {
+            let json = serde_json::to_string(&k).unwrap();
+            assert_eq!(json.trim_matches('"'), k.wire_name(), "{k:?} name/serde mismatch");
+        }
+    }
+
+    #[test]
+    fn wire_names_are_all_distinct() {
+        let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.wire_name()).collect();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count, "two kinds share a wire name");
+    }
+
+    #[test]
+    fn an_unknown_wire_name_is_refused_rather_than_defaulted() {
+        assert_eq!(Kind::from_wire("bogus"), None);
+        assert_eq!(Kind::from_wire(""), None);
+        assert_eq!(Kind::from_wire("Death"), None, "matching is exact, not case-folded");
     }
 
     #[test]

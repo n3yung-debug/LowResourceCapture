@@ -280,9 +280,17 @@ impl State {
             }
 
             "mark" => {
-                let kind = match m.kind.as_str() {
-                    "playerkill" => Kind::PlayerKill,
-                    _ => Kind::Death,
+                // Single source of truth for the name mapping, and no
+                // catch-all: an unrecognized kind is refused, not silently
+                // recorded as something else. A wrong label is worse than a
+                // missing one — it trains the model on a lie.
+                let Some(kind) = Kind::from_wire(&m.kind) else {
+                    log::warn!("review: refusing unknown mark kind {:?}", m.kind);
+                    let _ = proxy.send_event(UserEvent::Eval(format!(
+                        "window.clipError({})",
+                        js_str(&format!("Unknown mark type {:?} — nothing recorded.", m.kind))
+                    )));
+                    return;
                 };
                 self.set.mark(kind, m.at);
                 self.save();
