@@ -148,9 +148,22 @@ webcam bottom-left, follower alerts top-centre. Timestamps annotated by Nick.
   RESOLVED 2026-08-07, n=5.** Warm-particle rise: players 3.1 / 13.2 · monsters
   4.5 / 10.8 / **21.1**. The largest burst in the sample is a monster kill and
   the smallest is a player kill; the ranges overlap completely. It is a *death*
-  effect (anything dying drops loot), not a PvP one. Still useful as a cheap
-  high-recall "something died" candidate generator — but **the red player
-  nameplate must carry PvP discrimination.**
+  effect (anything dying drops loot), not a PvP one.
+  - **SUPERSEDED 2026-08-08: it is NOT usable as a candidate generator
+    either.** The line above previously called it "a cheap high-recall
+    'something died' candidate generator". Sweeping both full recordings
+    disproves that. Best case on the Twitch VOD: **4 of 6 real events found
+    with 32 false positives**; on the native local recording it never exceeds
+    3 of 6. A rolling-baseline variant (rise above a 3s trailing median) is no
+    better — the local file's median warm-particle fraction is 6.3%, so
+    continuous combat VFX swamp any threshold.
+  - **Why the earlier claim was wrong, and it's the same mistake twice:** the
+    burst was only ever measured *at known kill instants*. That proves it
+    fires on kills; it says nothing about how often it fires otherwise. The
+    death card is trustworthy precisely because it was swept across all 1123
+    frames and the false-positive ceiling was measured. **Rule, now earned
+    twice: a detector is not validated until it has been swept over footage
+    where nothing happens.**
   - Took three attempts; the first two were instrument failures, worth
     remembering as a method warning:
     1. Guessed colour thresholds (`sat > 0.45`) — missed a burst plainly

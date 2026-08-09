@@ -173,7 +173,7 @@ pub fn run(video: &str) -> Result<()> {
         label_path,
         video: video.to_string(),
         duration,
-        scan: "scanning for deaths…".into(),
+        scan: "scanning for deaths… (kills aren't auto-detected — mark them with K)".into(),
         cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
@@ -214,7 +214,10 @@ pub fn run(video: &str) -> Result<()> {
             }
             WinEvent::UserEvent(UserEvent::TrainRefresh) => state.push_training_status(&proxy),
             WinEvent::UserEvent(UserEvent::Progress(frac)) => {
-                state.scan = format!("scanning for deaths… {}%", (frac * 100.0).round() as u32);
+                state.scan = format!(
+                    "scanning for deaths… {}% (kills aren't auto-detected — mark with K)",
+                    (frac * 100.0).round() as u32
+                );
                 let _ = webview
                     .evaluate_script(&format!("window.scanProgress({:.4})", frac));
             }
@@ -222,11 +225,20 @@ pub fn run(video: &str) -> Result<()> {
                 Ok(found) => {
                     let n = found.len();
                     log::info!("scan complete: {n} death(s)");
+                    // Always say kills aren't detected, not just when the
+                    // scan found nothing — otherwise a run that finds deaths
+                    // reads as "the scan worked", implying kills were looked
+                    // for and none were there.
                     state.scan = if n == 0 {
-                        "scan complete — no deaths found. Scrub and press K to mark kills."
+                        "scan complete — no deaths found. Kills are never auto-detected: \
+                         scrub and press K (player) or M (monster)."
                             .into()
                     } else {
-                        format!("scan complete — {n} death{} found", if n == 1 { "" } else { "s" })
+                        format!(
+                            "scan complete — {n} death{} found. Kills are never \
+                             auto-detected: scrub and press K (player) or M (monster).",
+                            if n == 1 { "" } else { "s" }
+                        )
                     };
                     state.set.merge_detections(found, 3.0);
                     state.save();
